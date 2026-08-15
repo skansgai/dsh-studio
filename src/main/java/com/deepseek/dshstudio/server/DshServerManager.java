@@ -1,0 +1,288 @@
+package com.deepseek.dshstudio.server;
+
+import com.deepseek.dshstudio.DshStudioConstants;
+import com.deepseek.dshstudio.settings.DshSettingsState;
+import com.deepseek.dshstudio.util.DshUtil;
+import com.intellij.notification.NotificationGroupManager;
+import com.intellij.notification.NotificationType;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.project.Project;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
+/**
+ * 项目级服务：管理 DeepSeek Harness web 服务器进程的启动 / 停止 / 健康探测 / 日志。
+ * <p>
+ * 状态机：
+ * <ul>
+ *   <li>{@link ServerState#STOPPED} — 未启动（且外部无实例）</li>
+ *   <li>{@link ServerState#STARTING} — 已拉起进程，等待端口就绪</li>
+ *   <li>{@link ServerState#RUNNING} — 服务器可达（本插件启动的，或外部已运行的实例）</li>
+ *   <li>{@link ServerState#FAILED} — 启动失败 / 启动超时 / 进程异常退出</li>
+ * </ul>
+ */
+public final class DshServerManager {
+
+    public enum ServerState {
+        STOPPED,
+        STARTING,
+        RUNNING,
+        FAILED
+    }
+
+    private final Project project;
+
+    private final Object lock = new Object();
+    private final StringBuilder log = new StringBuilder();
+
+    private volatile ServerState state = ServerState.STOPPED;
+    private volatile boolean reachable;
+    private volatile boolean startAttempted;
+    @Nullable
+    private volatile Process process;
+
+    private DshServerManager(@NotNull Project project) {
+        this.project = project;
+    }
+
+    public static DshServerManager getInstance(@NotNull Project project) {
+        return project.getService(DshServerManager.class);
+    }
+
+    // ── 状态查询 ──────────────────────────────────────────────────────────
+
+    public ServerState getState() {
+        return state;
+    }
+
+    /** 最近一次健康探测的结果。 */
+    public boolean isReachable() {
+        return reachable;
+    }
+
+    /** 是否有本插件拉起的、仍存活的进程。 */
+    public boolean isManagedProcessAlive() {
+        Process p = process;
+        return p != null && p.isAlive();
+    }
+
+    /** 当前连接地址。 */
+    public String getUrl() {
+        return DshSettingsState.getInstance().normalizedServerUrl();
+    }
+
+    // ── 启动 / 停止 ────────────────────────────────────────────────────────
+
+    /**
+     * 启动服务器（异步）。若地址已可达则直接进入 RUNNING（视为外部实例，不再重复启动）。
+     */
+    public void startServer() {
+        DshSettingsState settings = DshSettingsState.getInstance();
+        synchronized (lock) {
+            if (reachable) {
+                startAttempted = false;
+                setState(ServerState.RUNNING);
+                return;
+            }
+            if (isManagedProcessAlive()) {
+                setState(ServerState.STARTING);
+                return;
+            }
+            String workdir = DshUtil.resolveWorkingDirectory(settings, project);
+            List<String> command;
+            try {
+                command = DshUtil.resolveCommandLine(settings, project);
+            } catch (Exception e) {
+                appendLog("[dsh] 无法解析启动命令: " + e.getMessage() + "\n");
+                startAttempted = true;
+                setState(ServerState.FAILED);
+                return;
+            }
+            try {
+                ProcessBuilder pb = new ProcessBuilder(command);
+                pb.directory(new File(workdir));
+                pb.redirectErrorStream(true);
+                if (settings.dshHome != null && !settings.dshHome.trim().isEmpty()) {
+                    pb.environment().put("DSH_HOME", settings.dshHome.trim());
+                }
+                appendLog("$ " + String.join(" ", command) + "   (cwd: " + workdir + ")\n");
+                Process p = pb.start();
+                process = p;
+                startAttempted = true;
+                setState(ServerState.STARTING);
+
+                // 输出流 → 日志
+                ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                    try (BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            appendLog(line + "\n");
+                        }
+                    } catch (IOException ignored) {
+                        // 进程结束
+                    }
+                });
+
+                // 进程退出 → 更新状态
+                ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                    try {
+                        int code = p.waitFor();
+                        appendLog("\n[dsh] 进程已退出，退出码 " + code + "\n");
+                        if (process == p) {
+                            probe();
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+
+                // 看门狗：启动超时
+                ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                    long deadline = System.currentTimeMillis() + DshStudioConstants.START_WATCHDOG_MS;
+                    while (System.currentTimeMillis() < deadline
+                            && state == ServerState.STARTING
+                            && isManagedProcessAlive()) {
+                        try {
+                            Thread.sleep(1000);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                    }
+                    if (state == ServerState.STARTING && !reachable) {
+                        appendLog("[dsh] 等待服务器就绪超时（" + (DshStudioConstants.START_WATCHDOG_MS / 1000) + "s），请查看上方日志。\n");
+                        setState(ServerState.FAILED);
+                    }
+                });
+            } catch (IOException e) {
+                appendLog("[dsh] 启动失败: " + e.getMessage() + "\n");
+                if (!DshUtil.isNpxAvailable()) {
+                    appendLog("[dsh] 提示：未检测到 Node.js / npx。请安装 Node.js 18+，或在设置中自定义启动命令。\n");
+                }
+                startAttempted = true;
+                setState(ServerState.FAILED);
+            }
+        }
+    }
+
+    /**
+     * 停止由本插件启动的服务器进程（含子进程树）。
+     */
+    public void stopServer() {
+        Process p = process;
+        if (p == null || !p.isAlive()) {
+            if (reachable) {
+                notifyBalloon("无法停止外部服务器",
+                        "当前地址 " + getUrl() + " 上的服务器并非由本插件启动，请在启动它的终端中停止，或直接关闭对应进程。",
+                        NotificationType.INFORMATION);
+            } else {
+                startAttempted = false;
+                setState(ServerState.STOPPED);
+            }
+            return;
+        }
+        appendLog("[dsh] 正在停止服务器...\n");
+        DshUtil.destroyProcessTree(p);
+        process = null;
+        startAttempted = false;
+        setState(ServerState.STOPPED);
+    }
+
+    /**
+     * 立即执行一次健康探测并更新状态（阻塞，请勿在 EDT 直接调用；见 {@link #probeAsync()}）。
+     */
+    public void probe() {
+        boolean up = DshUtil.isReachable(getUrl(), DshStudioConstants.HEALTH_TIMEOUT_MS);
+        reachable = up;
+        ServerState next;
+        if (up) {
+            next = ServerState.RUNNING;
+            startAttempted = false;
+        } else if (isManagedProcessAlive()) {
+            next = ServerState.STARTING;
+        } else if (startAttempted) {
+            next = ServerState.FAILED;
+        } else {
+            next = ServerState.STOPPED;
+        }
+        setState(next);
+    }
+
+    /** 在后台线程执行一次健康探测，避免阻塞 EDT。 */
+    public void probeAsync() {
+        ApplicationManager.getApplication().executeOnPooledThread(this::probe);
+    }
+
+    // ── 日志 ──────────────────────────────────────────────────────────────
+
+    public String getLogText() {
+        synchronized (lock) {
+            return log.toString();
+        }
+    }
+
+    public void clearLog() {
+        synchronized (lock) {
+            log.setLength(0);
+        }
+        fireLog(""); // 触发 UI 刷新
+    }
+
+    private void appendLog(String chunk) {
+        if (chunk == null || chunk.isEmpty()) {
+            return;
+        }
+        synchronized (lock) {
+            log.append(chunk);
+            if (log.length() > DshStudioConstants.LOG_CAP_CHARS) {
+                log.delete(0, log.length() - DshStudioConstants.LOG_CAP_CHARS);
+            }
+        }
+        fireLog(chunk);
+    }
+
+    // ── 通知 ──────────────────────────────────────────────────────────────
+
+    private void setState(ServerState next) {
+        if (next == state) {
+            return;
+        }
+        state = next;
+        fireState(next);
+    }
+
+    private void fireState(ServerState next) {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (!project.isDisposed()) {
+                project.getMessageBus().syncPublisher(DshServerTopics.SERVER_TOPIC).onStateChanged(next);
+            }
+        });
+    }
+
+    private void fireLog(String chunk) {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (!project.isDisposed()) {
+                project.getMessageBus().syncPublisher(DshServerTopics.SERVER_TOPIC).onLog(chunk);
+            }
+        });
+    }
+
+    private void notifyBalloon(String title, String content, NotificationType type) {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (!project.isDisposed()) {
+                NotificationGroupManager.getInstance()
+                        .getNotificationGroup(DshStudioConstants.NOTIFICATION_GROUP_ID)
+                        .createNotification(title, content, type)
+                        .notify(project);
+            }
+        });
+    }
+}
