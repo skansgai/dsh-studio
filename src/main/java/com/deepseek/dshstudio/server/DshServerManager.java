@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * 项目级服务：管理 DeepSeek Harness web 服务器进程的启动 / 停止 / 健康探测 / 日志。
@@ -105,6 +106,19 @@ public final class DshServerManager {
                 setState(ServerState.FAILED);
                 return;
             }
+            // 前置检查：默认使用 npx 启动，但本机没有 Node.js → 直接友好提示，不再盲目拉起进程
+            if (usesNpxLauncher(command) && !DshUtil.isNpxAvailable()) {
+                appendLog("[dsh] 未检测到 Node.js / npx。请先安装 Node.js 18+（https://nodejs.org），"
+                        + "或在 设置 → DeepSeek Harness 中自定义启动命令。\n");
+                notifyBalloon("无法启动 DeepSeek Harness 服务器",
+                        "未检测到 Node.js / npx。<br>" +
+                                "请先安装 Node.js 18+（<a href=\"https://nodejs.org\">https://nodejs.org</a>），" +
+                                "然后点击 ▶ 重试；<br>或在 设置 → DeepSeek Harness 中自定义启动命令。",
+                        NotificationType.WARNING);
+                startAttempted = true;
+                setState(ServerState.FAILED);
+                return;
+            }
             try {
                 ProcessBuilder pb = new ProcessBuilder(command);
                 pb.directory(new File(workdir));
@@ -167,6 +181,10 @@ public final class DshServerManager {
                 if (!DshUtil.isNpxAvailable()) {
                     appendLog("[dsh] 提示：未检测到 Node.js / npx。请安装 Node.js 18+，或在设置中自定义启动命令。\n");
                 }
+                notifyBalloon("启动 DeepSeek Harness 服务器失败",
+                        "无法执行启动命令，详见工具窗口的 Server Log 面板。<br>" +
+                                "常见原因：Node.js 未安装、端口被占用、或自定义命令有误。",
+                        NotificationType.ERROR);
                 startAttempted = true;
                 setState(ServerState.FAILED);
             }
@@ -247,6 +265,15 @@ public final class DshServerManager {
             }
         }
         fireLog(chunk);
+    }
+
+    /** 判断启动命令是否基于 npx（用于前置检测 Node.js 是否可用）。 */
+    private static boolean usesNpxLauncher(List<String> command) {
+        if (command == null || command.isEmpty()) {
+            return false;
+        }
+        String name = new File(command.get(0)).getName().toLowerCase(Locale.ROOT);
+        return name.equals("npx") || name.equals("npx.cmd");
     }
 
     // ── 通知 ──────────────────────────────────────────────────────────────
