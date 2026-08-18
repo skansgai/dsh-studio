@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.1.1"
+version = "0.1.2"
 
 repositories {
     mavenCentral()
@@ -61,6 +61,10 @@ tasks {
     patchPluginXml {
         version.set(project.version.toString())
         changeNotes.set("""
+            <h3>0.1.2</h3>
+            <ul>
+              <li>新增「半透明覆盖层」：可在网页上叠加背景图（实验性，可调不透明度）</li>
+            </ul>
             <h3>0.1.1</h3>
             <ul>
               <li>新增界面主题（跟随 IDE / 浅色 / 深色）与背景图片设置</li>

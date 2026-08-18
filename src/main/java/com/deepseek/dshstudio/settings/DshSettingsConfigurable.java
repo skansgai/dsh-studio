@@ -42,6 +42,8 @@ public final class DshSettingsConfigurable implements Configurable {
     private final JCheckBox embeddedCheckBox = new JCheckBox("使用内嵌浏览器（JCEF）显示界面");
     private final JComboBox<DshUiTheme> themeCombo = new JComboBox<>(DshUiTheme.values());
     private final JBTextField backgroundImageField = new JBTextField();
+    private final JCheckBox overlayCheckBox = new JCheckBox("在网页上叠加半透明背景层（实验性，可能受原生渲染限制）");
+    private final JSpinner overlayOpacitySpinner = new JSpinner(new SpinnerNumberModel(40, 0, 100, 5));
     private final JBLabel testResultLabel = new JBLabel();
 
     private JPanel root;
@@ -129,6 +131,20 @@ public final class DshSettingsConfigurable implements Configurable {
         c.gridx = 0;
         c.gridwidth = 2;
         c.weightx = 1;
+        JPanel overlayRow = new JPanel(new BorderLayout(8, 0));
+        overlayRow.add(overlayCheckBox, BorderLayout.WEST);
+        JBLabel opLabel = new JBLabel("不透明度(%):");
+        JPanel op = new JPanel(new BorderLayout(4, 0));
+        op.add(opLabel, BorderLayout.WEST);
+        op.add(overlayOpacitySpinner, BorderLayout.CENTER);
+        overlayRow.add(op, BorderLayout.EAST);
+        form.add(overlayRow, c);
+        c.gridwidth = 1;
+
+        c.gridy = row++;
+        c.gridx = 0;
+        c.gridwidth = 2;
+        c.weightx = 1;
         form.add(autoStartCheckBox, c);
         c.gridwidth = 1;
 
@@ -208,7 +224,9 @@ public final class DshSettingsConfigurable implements Configurable {
                 || autoStartCheckBox.isSelected() != state.autoStartServer
                 || embeddedCheckBox.isSelected() != state.useEmbeddedBrowser
                 || !((DshUiTheme) themeCombo.getSelectedItem()).id.equals(state.uiTheme)
-                || !backgroundImageField.getText().equals(state.backgroundImagePath);
+                || !backgroundImageField.getText().equals(state.backgroundImagePath)
+                || overlayCheckBox.isSelected() != state.pageOverlayEnabled
+                || (Integer) overlayOpacitySpinner.getValue() != state.pageOverlayOpacity;
     }
 
     @Override
@@ -223,6 +241,8 @@ public final class DshSettingsConfigurable implements Configurable {
         state.useEmbeddedBrowser = embeddedCheckBox.isSelected();
         state.uiTheme = ((DshUiTheme) themeCombo.getSelectedItem()).id;
         state.backgroundImagePath = backgroundImageField.getText().trim();
+        state.pageOverlayEnabled = overlayCheckBox.isSelected();
+        state.pageOverlayOpacity = (Integer) overlayOpacitySpinner.getValue();
     }
 
     @Override
@@ -237,6 +257,8 @@ public final class DshSettingsConfigurable implements Configurable {
         embeddedCheckBox.setSelected(state.useEmbeddedBrowser);
         themeCombo.setSelectedItem(DshUiTheme.fromId(state.uiTheme));
         backgroundImageField.setText(state.backgroundImagePath);
+        overlayCheckBox.setSelected(state.pageOverlayEnabled);
+        overlayOpacitySpinner.setValue(state.pageOverlayOpacity);
         testResultLabel.setText("");
         testResultLabel.setHorizontalAlignment(SwingConstants.LEFT);
     }
