@@ -44,12 +44,6 @@ public final class DshSettingsState implements PersistentStateComponent<DshSetti
     /** 工具窗口背景图片（绝对路径，本地图片文件）；留空则不显示背景图。 */
     public String backgroundImagePath = "";
 
-    /** 是否在网页上方盖一层半透明覆盖层（含背景图），实验性。 */
-    public boolean pageOverlayEnabled = false;
-
-    /** 覆盖层不透明度（0–100）。 */
-    public int pageOverlayOpacity = 40;
-
     public static DshSettingsState getInstance() {
         return ApplicationManager.getApplication().getService(DshSettingsState.class);
     }
@@ -72,8 +66,6 @@ public final class DshSettingsState implements PersistentStateComponent<DshSetti
         this.healthPollMs = state.healthPollMs;
         this.uiTheme = state.uiTheme == null ? "follow" : state.uiTheme;
         this.backgroundImagePath = state.backgroundImagePath == null ? "" : state.backgroundImagePath;
-        this.pageOverlayEnabled = state.pageOverlayEnabled;
-        this.pageOverlayOpacity = state.pageOverlayOpacity;
     }
 
     /** 规范化后的服务器地址。 */

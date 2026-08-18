@@ -65,7 +65,6 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     private final JPanel browserHolder = new JPanel(new CardLayout());
     private final ImageBackdropPanel emptyStatePanel = new ImageBackdropPanel(0.35f);
     private final ImageBackdropPanel statusBarPanel = new ImageBackdropPanel(0.45f);
-    private final ImageOverlayPanel pageOverlay = new ImageOverlayPanel();
     private final JBTabbedPane tabs = new JBTabbedPane();
 
     private final Timer healthTimer;
@@ -169,24 +168,11 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         emptyStatePanel.add(empty, BorderLayout.SOUTH);
         browserHolder.add(emptyStatePanel, "empty");
         if (embeddedEnabled) {
-            JPanel browserCard = new JPanel(new BorderLayout());
-            browserCard.add(browser.getComponent(), BorderLayout.CENTER);
-            // 实验性覆盖层：叠加在网页之上
-            if (DshSettingsState.getInstance().pageOverlayEnabled) {
-                configurePageOverlay();
-                browserCard.add(pageOverlay, BorderLayout.CENTER);
-            }
-            browserHolder.add(browserCard, "browser");
+            browserHolder.add(browser.getComponent(), "browser");
         } else {
             browserHolder.add(buildFallbackPanel(), "browser");
         }
         return browserHolder;
-    }
-
-    private void configurePageOverlay() {
-        DshSettingsState s = DshSettingsState.getInstance();
-        pageOverlay.setBackgroundImage(s.backgroundImagePath);
-        pageOverlay.setAlpha(Math.max(0f, Math.min(1f, s.pageOverlayOpacity / 100f)));
     }
 
     /** 把设置里的背景图应用到状态栏条与空白页。 */
