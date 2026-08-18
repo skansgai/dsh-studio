@@ -224,8 +224,10 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     }
 
     /**
-     * 主题桥接：把插件里选择的浅/深色尽量同步到内嵌页面（DSH 页面按 prefers-color-scheme 判定）。
-     * 设置 color-scheme，并覆盖 matchMedia 通知页面（尽力而为，跟随模式下不注入）。
+     * 页面深浅色桥接（最小、安全版）：
+     * 只设置 documentElement 的 CSS color-scheme —— 这是标准 CSS 属性，只影响原生控件/滚动条，
+     * 不会改动页面布局。不再覆盖 window.matchMedia（那会导致 DSH 侧边栏/设置等布局失效）。
+     * DSH 页面自身的完整主题请用其界面内 Settings → General 的 Light/Dark/System 切换。
      */
     private void injectPageTheme() {
         if (browser == null) {
@@ -233,26 +235,14 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         }
         Boolean dark = DshUiTheme.fromId(DshSettingsState.getInstance().uiTheme).isDarkOverride();
         if (dark == null) {
-            return; // 跟随模式：页面交给 DSH 自带的 System
+            return; // 跟随模式：交给 DSH 自动（System）
         }
         String scheme = dark ? "dark" : "light";
-        // @formatter:off
         String script =
-                "try{"
+                "if(document&&document.documentElement){"
                 + "document.documentElement.style.colorScheme='" + scheme + "';"
-                + "var real=matchMedia;"
-                + "window.matchMedia=function(q){"
-                + "var m=real(q);"
-                + "if(q.indexOf('prefers-color-scheme')>=0){"
-                + "Object.defineProperty(m,'matches',{get:function(){return " + dark + ";}});"
-                + "}"
-                + "return m;};"
-                + "window.dispatchEvent(new Event('resize'));"
-                + "var s=document.createElement('style');s.id='__dsh_theme_bridge__';"
-                + "s.textContent='html{' + (window.matchMedia('(prefers-color-scheme: dark)').matches?'filter:invert(0)':'' ) + '}';"
-                + "}catch(e){}";
-        // @formatter:on
-        browser.getCefBrowser().executeJavaScript(script, loadedUrl == null ? "" : loadedUrl, 0);
+                + "}";
+        browser.getCefBrowser().executeJavaScript(script, "", 0);
     }
 
     /** 将选中的主题应用到工具窗口自身界面（状态栏文字、日志区）。 */
