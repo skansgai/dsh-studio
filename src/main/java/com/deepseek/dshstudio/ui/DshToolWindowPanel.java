@@ -37,6 +37,7 @@ import javax.swing.JTextArea;
 import javax.swing.SwingConstants;
 import javax.swing.Timer;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Font;
@@ -61,7 +62,9 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
 
     private final JBLabel statusLabel = new JBLabel();
     private final JTextArea logArea = new JTextArea();
-    private final ImageBackdropPanel browserHolder = new ImageBackdropPanel(0.35f);
+    private final JPanel browserHolder = new JPanel(new CardLayout());
+    private final ImageBackdropPanel emptyStatePanel = new ImageBackdropPanel(0.35f);
+    private final ImageBackdropPanel statusBarPanel = new ImageBackdropPanel(0.45f);
     private final JBTabbedPane tabs = new JBTabbedPane();
 
     private final Timer healthTimer;
@@ -90,6 +93,7 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         buildUi();
         logArea.setText(manager.getLogText());
         applyThemeToChrome();
+        updateViewCard();
 
         this.connection = project.getMessageBus().connect(this);
         connection.subscribe(DshServerTopics.SERVER_TOPIC, new DshServerListener() {
@@ -125,11 +129,10 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     }
 
     private JComponent buildStatusBar() {
-        JPanel bar = new JPanel(new BorderLayout());
-        bar.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 4));
+        statusBarPanel.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 4));
         statusLabel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 8));
         statusLabel.setVerticalTextPosition(SwingConstants.CENTER);
-        bar.add(statusLabel, BorderLayout.WEST);
+        statusBarPanel.add(statusLabel, BorderLayout.WEST);
 
         DefaultActionGroup group = new DefaultActionGroup();
         group.add(new StartServerAction(project));
@@ -141,8 +144,8 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         ActionToolbar toolbar = ActionManager.getInstance()
                 .createActionToolbar("DshStudio.Toolbar", group, true);
         toolbar.setTargetComponent(this);
-        bar.add(toolbar.getComponent(), BorderLayout.EAST);
-        return bar;
+        statusBarPanel.add(toolbar.getComponent(), BorderLayout.EAST);
+        return statusBarPanel;
     }
 
     private JComponent buildTabs() {
@@ -155,24 +158,38 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     }
 
     private Component buildBrowserTab() {
-        DshSettingsState settings = DshSettingsState.getInstance();
-        browserHolder.setBackgroundImage(settings.backgroundImagePath);
-        addEmptyStateOverlay();
-        if (embeddedEnabled) {
-            browserHolder.add(browser.getComponent(), BorderLayout.CENTER);
-        } else {
-            browserHolder.add(buildFallbackPanel(), BorderLayout.CENTER);
-        }
-        return browserHolder;
-    }
-
-    /** 未连接/加载中时，在背景图上叠加一句提示（透明，不遮挡背景图）。 */
-    private void addEmptyStateOverlay() {
+        applyBackgroundImages();
+        // 卡片一：空白/未连接状态（显示背景图 + 提示）
+        emptyStatePanel.setLayout(new BorderLayout());
         JBLabel empty = new JBLabel("等待连接到 DeepSeek Harness 服务器…", SwingConstants.CENTER);
         empty.setOpaque(false);
         empty.setForeground(JBColor.WHITE);
         empty.setBorder(BorderFactory.createEmptyBorder(0, 0, 24, 0));
-        browserHolder.add(empty, BorderLayout.SOUTH);
+        emptyStatePanel.add(empty, BorderLayout.SOUTH);
+        browserHolder.add(emptyStatePanel, "empty");
+        if (embeddedEnabled) {
+            browserHolder.add(browser.getComponent(), "browser");
+        } else {
+            browserHolder.add(buildFallbackPanel(), "browser");
+        }
+        return browserHolder;
+    }
+
+    /** 把设置里的背景图应用到状态栏条与空白页。 */
+    private void applyBackgroundImages() {
+        String path = DshSettingsState.getInstance().backgroundImagePath;
+        statusBarPanel.setBackgroundImage(path);
+        emptyStatePanel.setBackgroundImage(path);
+    }
+
+    /** 已连接且已加载页面时切到浏览器卡片，否则显示背景图空白卡片。 */
+    private void updateViewCard() {
+        CardLayout cl = (CardLayout) browserHolder.getLayout();
+        if (manager.getState() == ServerState.RUNNING && embeddedEnabled && browser != null) {
+            cl.show(browserHolder, "browser");
+        } else {
+            cl.show(browserHolder, "empty");
+        }
     }
 
     private JComponent buildFallbackPanel() {
@@ -206,6 +223,7 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         }
         manager.probeAsync();
         updateStatus();
+        updateViewCard();
         if (manager.getState() == ServerState.RUNNING) {
             loadUrlOnce();
         }

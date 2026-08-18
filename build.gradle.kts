@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.1.0"
+version = "0.1.1"
 
 repositories {
     mavenCentral()
@@ -61,6 +61,11 @@ tasks {
     patchPluginXml {
         version.set(project.version.toString())
         changeNotes.set("""
+            <h3>0.1.1</h3>
+            <ul>
+              <li>新增界面主题（跟随 IDE / 浅色 / 深色）与背景图片设置</li>
+              <li>修复内嵌页面布局异常：移除了会破坏侧边栏/设置的 matchMedia 覆盖</li>
+            </ul>
             <h3>0.1.0</h3>
             <ul>
               <li>内嵌浏览器工具窗口（JCEF），直接在 Android Studio / IDEA 中打开 DeepSeek Harness 界面</li>
