@@ -3,6 +3,8 @@ package com.deepseek.dshstudio.settings;
 import com.deepseek.dshstudio.DshStudioConstants;
 import com.deepseek.dshstudio.util.DshUtil;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.fileChooser.FileChooser;
+import com.intellij.openapi.fileChooser.FileTypeDescriptor;
 import com.intellij.openapi.options.Configurable;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBLabel;
@@ -13,6 +15,7 @@ import org.jetbrains.annotations.Nullable;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JPanel;
 import javax.swing.JSpinner;
@@ -22,6 +25,8 @@ import java.awt.BorderLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.event.ItemEvent;
+import java.io.File;
 
 /**
  * 设置页：Settings → Tools → DeepSeek Harness。
@@ -35,6 +40,8 @@ public final class DshSettingsConfigurable implements Configurable {
     private final JBTextField dshHomeField = new JBTextField();
     private final JCheckBox autoStartCheckBox = new JCheckBox("打开工具窗口时自动启动服务器（若尚未运行）");
     private final JCheckBox embeddedCheckBox = new JCheckBox("使用内嵌浏览器（JCEF）显示界面");
+    private final JComboBox<DshUiTheme> themeCombo = new JComboBox<>(DshUiTheme.values());
+    private final JBTextField backgroundImageField = new JBTextField();
     private final JBLabel testResultLabel = new JBLabel();
 
     private JPanel root;
@@ -99,6 +106,27 @@ public final class DshSettingsConfigurable implements Configurable {
 
         c.gridy = row++;
         c.gridx = 0;
+        c.weightx = 0;
+        form.add(new JBLabel("界面主题:"), c);
+        c.gridx = 1;
+        c.weightx = 1;
+        form.add(themeCombo, c);
+
+        c.gridy = row++;
+        c.gridx = 0;
+        c.weightx = 0;
+        form.add(new JBLabel("背景图片:"), c);
+        c.gridx = 1;
+        c.weightx = 1;
+        JPanel bgRow = new JPanel(new BorderLayout(6, 0));
+        bgRow.add(backgroundImageField, BorderLayout.CENTER);
+        JButton browseButton = new JButton("浏览…");
+        browseButton.addActionListener(e -> chooseBackgroundImage());
+        bgRow.add(browseButton, BorderLayout.EAST);
+        form.add(bgRow, c);
+
+        c.gridy = row++;
+        c.gridx = 0;
         c.gridwidth = 2;
         c.weightx = 1;
         form.add(autoStartCheckBox, c);
@@ -160,6 +188,15 @@ public final class DshSettingsConfigurable implements Configurable {
         });
     }
 
+    private void chooseBackgroundImage() {
+        FileTypeDescriptor descriptor = new FileTypeDescriptor("背景图片", "png", "jpg", "jpeg", "svg", "webp", "gif", "bmp");
+        com.intellij.openapi.vfs.VirtualFile file = FileChooser.chooseFile(
+                descriptor, null, null);
+        if (file != null && file.getPath() != null) {
+            backgroundImageField.setText(file.getPath());
+        }
+    }
+
     @Override
     public boolean isModified() {
         DshSettingsState state = DshSettingsState.getInstance();
@@ -169,7 +206,9 @@ public final class DshSettingsConfigurable implements Configurable {
                 || !workingDirectoryField.getText().equals(state.workingDirectory)
                 || !dshHomeField.getText().equals(state.dshHome)
                 || autoStartCheckBox.isSelected() != state.autoStartServer
-                || embeddedCheckBox.isSelected() != state.useEmbeddedBrowser;
+                || embeddedCheckBox.isSelected() != state.useEmbeddedBrowser
+                || !((DshUiTheme) themeCombo.getSelectedItem()).id.equals(state.uiTheme)
+                || !backgroundImageField.getText().equals(state.backgroundImagePath);
     }
 
     @Override
@@ -182,6 +221,8 @@ public final class DshSettingsConfigurable implements Configurable {
         state.dshHome = dshHomeField.getText().trim();
         state.autoStartServer = autoStartCheckBox.isSelected();
         state.useEmbeddedBrowser = embeddedCheckBox.isSelected();
+        state.uiTheme = ((DshUiTheme) themeCombo.getSelectedItem()).id;
+        state.backgroundImagePath = backgroundImageField.getText().trim();
     }
 
     @Override
@@ -194,6 +235,8 @@ public final class DshSettingsConfigurable implements Configurable {
         dshHomeField.setText(state.dshHome);
         autoStartCheckBox.setSelected(state.autoStartServer);
         embeddedCheckBox.setSelected(state.useEmbeddedBrowser);
+        themeCombo.setSelectedItem(DshUiTheme.fromId(state.uiTheme));
+        backgroundImageField.setText(state.backgroundImagePath);
         testResultLabel.setText("");
         testResultLabel.setHorizontalAlignment(SwingConstants.LEFT);
     }

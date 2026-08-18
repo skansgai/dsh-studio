@@ -5,6 +5,7 @@ import com.deepseek.dshstudio.actions.RefreshAction;
 import com.deepseek.dshstudio.actions.StartServerAction;
 import com.deepseek.dshstudio.actions.StopServerAction;
 import com.deepseek.dshstudio.settings.DshSettingsState;
+import com.deepseek.dshstudio.settings.DshUiTheme;
 import com.deepseek.dshstudio.server.DshServerListener;
 import com.deepseek.dshstudio.server.DshServerManager;
 import com.deepseek.dshstudio.server.DshServerManager.ServerState;
@@ -60,7 +61,7 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
 
     private final JBLabel statusLabel = new JBLabel();
     private final JTextArea logArea = new JTextArea();
-    private final JPanel browserHolder = new JPanel(new BorderLayout());
+    private final ImageBackdropPanel browserHolder = new ImageBackdropPanel(0.35f);
     private final JBTabbedPane tabs = new JBTabbedPane();
 
     private final Timer healthTimer;
@@ -88,6 +89,7 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
 
         buildUi();
         logArea.setText(manager.getLogText());
+        applyThemeToChrome();
 
         this.connection = project.getMessageBus().connect(this);
         connection.subscribe(DshServerTopics.SERVER_TOPIC, new DshServerListener() {
@@ -153,12 +155,24 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     }
 
     private Component buildBrowserTab() {
+        DshSettingsState settings = DshSettingsState.getInstance();
+        browserHolder.setBackgroundImage(settings.backgroundImagePath);
+        addEmptyStateOverlay();
         if (embeddedEnabled) {
             browserHolder.add(browser.getComponent(), BorderLayout.CENTER);
         } else {
             browserHolder.add(buildFallbackPanel(), BorderLayout.CENTER);
         }
         return browserHolder;
+    }
+
+    /** 未连接/加载中时，在背景图上叠加一句提示（透明，不遮挡背景图）。 */
+    private void addEmptyStateOverlay() {
+        JBLabel empty = new JBLabel("等待连接到 DeepSeek Harness 服务器…", SwingConstants.CENTER);
+        empty.setOpaque(false);
+        empty.setForeground(JBColor.WHITE);
+        empty.setBorder(BorderFactory.createEmptyBorder(0, 0, 24, 0));
+        browserHolder.add(empty, BorderLayout.SOUTH);
     }
 
     private JComponent buildFallbackPanel() {
@@ -205,6 +219,61 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         if (!url.equals(loadedUrl)) {
             loadedUrl = url;
             browser.loadURL(url);
+            injectPageTheme();
+        }
+    }
+
+    /**
+     * 主题桥接：把插件里选择的浅/深色尽量同步到内嵌页面（DSH 页面按 prefers-color-scheme 判定）。
+     * 设置 color-scheme，并覆盖 matchMedia 通知页面（尽力而为，跟随模式下不注入）。
+     */
+    private void injectPageTheme() {
+        if (browser == null) {
+            return;
+        }
+        Boolean dark = DshUiTheme.fromId(DshSettingsState.getInstance().uiTheme).isDarkOverride();
+        if (dark == null) {
+            return; // 跟随模式：页面交给 DSH 自带的 System
+        }
+        String scheme = dark ? "dark" : "light";
+        // @formatter:off
+        String script =
+                "try{"
+                + "document.documentElement.style.colorScheme='" + scheme + "';"
+                + "var real=matchMedia;"
+                + "window.matchMedia=function(q){"
+                + "var m=real(q);"
+                + "if(q.indexOf('prefers-color-scheme')>=0){"
+                + "Object.defineProperty(m,'matches',{get:function(){return " + dark + ";}});"
+                + "}"
+                + "return m;};"
+                + "window.dispatchEvent(new Event('resize'));"
+                + "var s=document.createElement('style');s.id='__dsh_theme_bridge__';"
+                + "s.textContent='html{' + (window.matchMedia('(prefers-color-scheme: dark)').matches?'filter:invert(0)':'' ) + '}';"
+                + "}catch(e){}";
+        // @formatter:on
+        browser.getCefBrowser().executeJavaScript(script, loadedUrl == null ? "" : loadedUrl, 0);
+    }
+
+    /** 将选中的主题应用到工具窗口自身界面（状态栏文字、日志区）。 */
+    private void applyThemeToChrome() {
+        Boolean dark = DshUiTheme.fromId(DshSettingsState.getInstance().uiTheme).isDarkOverride();
+        Color bg;
+        Color fg;
+        if (Boolean.TRUE.equals(dark)) {
+            bg = new Color(0x1E1E1E);
+            fg = new Color(0xC0C0C0);
+        } else if (Boolean.FALSE.equals(dark)) {
+            bg = new Color(0xF5F5F5);
+            fg = new Color(0x333333);
+        } else {
+            bg = null; // 跟随 IDE
+            fg = null;
+        }
+        if (bg != null && fg != null) {
+            logArea.setBackground(bg);
+            logArea.setForeground(fg);
+            logArea.setCaretColor(fg);
         }
     }
 

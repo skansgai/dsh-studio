@@ -38,6 +38,12 @@ public final class DshSettingsState implements PersistentStateComponent<DshSetti
     /** 健康检查轮询间隔（毫秒）。 */
     public int healthPollMs = DshStudioConstants.HEALTH_POLL_MS;
 
+    /** 插件主题：follow / light / dark（作用于工具窗口界面并对内嵌页面做桥接）。 */
+    public String uiTheme = "follow";
+
+    /** 工具窗口背景图片（绝对路径，本地图片文件）；留空则不显示背景图。 */
+    public String backgroundImagePath = "";
+
     public static DshSettingsState getInstance() {
         return ApplicationManager.getApplication().getService(DshSettingsState.class);
     }
@@ -58,6 +64,8 @@ public final class DshSettingsState implements PersistentStateComponent<DshSetti
         this.autoStartServer = state.autoStartServer;
         this.useEmbeddedBrowser = state.useEmbeddedBrowser;
         this.healthPollMs = state.healthPollMs;
+        this.uiTheme = state.uiTheme == null ? "follow" : state.uiTheme;
+        this.backgroundImagePath = state.backgroundImagePath == null ? "" : state.backgroundImagePath;
     }
 
     /** 规范化后的服务器地址。 */
