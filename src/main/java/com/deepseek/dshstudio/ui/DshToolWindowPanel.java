@@ -100,6 +100,10 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
             @Override
             public void onStateChanged(ServerState state) {
                 updateStatus();
+                updateViewCard();
+                if (state == ServerState.RUNNING) {
+                    loadUrlOnce();
+                }
             }
 
             @Override
@@ -182,10 +186,12 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         emptyStatePanel.setBackgroundImage(path);
     }
 
-    /** 已连接且已加载页面时切到浏览器卡片，否则显示背景图空白卡片。 */
+    /** 已连接且已加载页面时切到浏览器卡片，否则显示背景图空白卡片；内嵌不可用时显示说明。 */
     private void updateViewCard() {
         CardLayout cl = (CardLayout) browserHolder.getLayout();
-        if (manager.getState() == ServerState.RUNNING && embeddedEnabled && browser != null) {
+        if (!embeddedEnabled || browser == null) {
+            cl.show(browserHolder, "browser"); // 该卡片在 !embeddedEnabled 时是说明面板
+        } else if (manager.getState() == ServerState.RUNNING) {
             cl.show(browserHolder, "browser");
         } else {
             cl.show(browserHolder, "empty");

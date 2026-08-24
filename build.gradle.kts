@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.1.2"
+version = "0.1.3"
 
 repositories {
     mavenCentral()
@@ -61,6 +61,11 @@ tasks {
     patchPluginXml {
         version.set(project.version.toString())
         changeNotes.set("""
+            <h3>0.1.3</h3>
+            <ul>
+              <li>修复：状态变为已连接时立即切换并加载网页（不再卡在背景图空白页）</li>
+              <li>修复：内嵌浏览器不可用时显示说明面板</li>
+            </ul>
             <h3>0.1.2</h3>
             <ul>
               <li>移除不起作用的实验性覆盖层（Swing 无法盖住原生浏览器窗口）；保留主题与背景图（顶部条/空白页）</li>
