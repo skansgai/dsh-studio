@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.1.3"
+version = "0.1.4"
 
 repositories {
     mavenCentral()
@@ -61,6 +61,10 @@ tasks {
     patchPluginXml {
         version.set(project.version.toString())
         changeNotes.set("""
+            <h3>0.1.4</h3>
+            <ul>
+              <li>修复插件图标：移至 JAR 根目录 pluginIcon.svg（市场将显示自定义图标而非默认图标）</li>
+            </ul>
             <h3>0.1.3</h3>
             <ul>
               <li>修复：状态变为已连接时立即切换并加载网页（不再卡在背景图空白页）</li>
