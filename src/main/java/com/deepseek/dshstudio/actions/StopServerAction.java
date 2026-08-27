@@ -17,7 +17,7 @@ public final class StopServerAction extends AnAction {
     public StopServerAction(@NotNull Project project) {
         super("Stop Server",
                 "Stop the DeepSeek Harness web server started by this plugin",
-                IconLoader.getIcon("/icons/dsh-stop.svg", StopServerAction.class));
+                IconLoader.getIcon("/icons/dsh-stop.svg", StopServerAction.class.getClassLoader()));
         this.project = project;
     }
 

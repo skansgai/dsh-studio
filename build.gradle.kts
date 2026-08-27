@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.1.4"
+version = "0.1.5"
 
 repositories {
     mavenCentral()
@@ -61,6 +61,10 @@ tasks {
     patchPluginXml {
         version.set(project.version.toString())
         changeNotes.set("""
+            <h3>0.1.5</h3>
+            <ul>
+              <li>消除市场验证警告：替换计划移除的 IconLoader.getIcon(String, Class) API</li>
+            </ul>
             <h3>0.1.4</h3>
             <ul>
               <li>修复插件图标：移至 JAR 根目录 pluginIcon.svg（市场将显示自定义图标而非默认图标）</li>

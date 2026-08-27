@@ -17,7 +17,7 @@ public final class OpenDshToolWindowAction extends AnAction {
     public OpenDshToolWindowAction() {
         super("DeepSeek Harness",
                 "Open the DeepSeek Harness tool window",
-                IconLoader.getIcon("/icons/dsh-toolwindow.svg", OpenDshToolWindowAction.class));
+                IconLoader.getIcon("/icons/dsh-toolwindow.svg", OpenDshToolWindowAction.class.getClassLoader()));
     }
 
     @Override
