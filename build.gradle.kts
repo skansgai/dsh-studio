@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.1.5"
+version = "0.1.6"
 
 repositories {
     mavenCentral()
@@ -58,9 +58,16 @@ tasks {
     buildSearchableOptions {
         enabled = false
     }
+    runPluginVerifier {
+        ideVersions.set(listOf("2024.3.7.1", "2025.1.7.2"))
+    }
     patchPluginXml {
         version.set(project.version.toString())
         changeNotes.set("""
+            <h3>0.1.6</h3>
+            <ul>
+              <li>改用官方推荐的单参数 IconLoader.getIcon(path)（避免计划移除的 API）</li>
+            </ul>
             <h3>0.1.5</h3>
             <ul>
               <li>消除市场验证警告：替换计划移除的 IconLoader.getIcon(String, Class) API</li>
