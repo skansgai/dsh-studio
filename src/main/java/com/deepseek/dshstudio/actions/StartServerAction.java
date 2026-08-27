@@ -4,7 +4,7 @@ import com.deepseek.dshstudio.server.DshServerManager;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.util.IconLoader;
+import com.intellij.ui.IconManager;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -17,7 +17,7 @@ public final class StartServerAction extends AnAction {
     public StartServerAction(@NotNull Project project) {
         super("Start Server",
                 "Start the DeepSeek Harness web server",
-                IconLoader.getIcon("/icons/dsh-start.svg"));
+                IconManager.getInstance().getIcon("/icons/dsh-start.svg", StartServerAction.class));
         this.project = project;
     }
 

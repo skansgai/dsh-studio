@@ -4,7 +4,7 @@ import com.deepseek.dshstudio.DshStudioConstants;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.util.IconLoader;
+import com.intellij.ui.IconManager;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowManager;
 import org.jetbrains.annotations.NotNull;
@@ -17,7 +17,7 @@ public final class OpenDshToolWindowAction extends AnAction {
     public OpenDshToolWindowAction() {
         super("DeepSeek Harness",
                 "Open the DeepSeek Harness tool window",
-                IconLoader.getIcon("/icons/dsh-toolwindow.svg"));
+                IconManager.getInstance().getIcon("/icons/dsh-toolwindow.svg", OpenDshToolWindowAction.class));
     }
 
     @Override
