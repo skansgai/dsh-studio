@@ -14,7 +14,25 @@
   <li>Open the same page in your system browser at any time</li>
   <li>Configurable URL / port / working directory (workspace root) / <code>DSH_HOME</code></li>
 </ul>
-<p>Requirements: Android Studio 2023.1+ / IntelliJ IDEA 2023.1+; Node.js 18+ is needed for the automatic server start.</p>
+
+<h3>Quick Start</h3>
+<ol>
+  <li><b>Install</b>: Settings &rarr; Plugins &rarr; Marketplace, search "DeepSeek Harness", install and restart the IDE.</li>
+  <li><b>Open</b>: click the blue hexagon icon on the right tool-window bar, or go to <b>Tools &rarr; DeepSeek Harness</b>.</li>
+  <li><b>Connect</b>: it auto-connects if a <code>dsh web</code> server is already running (default http://127.0.0.1:3080). If not, click <b>&#9654;</b> to start one - this requires Node.js 18+ and installs DeepSeek Harness automatically on first run.</li>
+  <li><b>Configure the model</b>: inside the Harness UI open <b>Settings &rarr; Models</b> and add your API key (e.g. a DeepSeek API key).</li>
+  <li><b>Go</b>: create a session, pick a model, and start chatting / coding.</li>
+</ol>
+
+<h3>Everyday controls</h3>
+<ul>
+  <li><b>&#9654; Start / &#9632; Stop</b> the server (toolbar on top of the tool window)</li>
+  <li><b>&#8635; Refresh</b> the page</li>
+  <li><b>Server Log</b> tab for troubleshooting</li>
+  <li><b>Settings &rarr; Tools &rarr; DeepSeek Harness</b>: theme, background image, port, working directory, DSH_HOME</li>
+</ul>
+
+<p>Requirements: Android Studio 2023.1+ / IntelliJ IDEA 2023.1+; Node.js 18+ is needed only for the automatic server start.</p>
 <p>DeepSeek Harness is DeepSeek's open-source coding agent framework; this plugin is just an IDE entry point for it.</p>
 ]]></description>
 

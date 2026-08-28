@@ -21,11 +21,21 @@ DeepSeek Harness 是 DeepSeek 的开源编码智能体框架；`dsh web` 会在�
 
 ## 安装
 
+**方式一：从 Marketplace 安装（推荐，已发布）**
+`File → Settings → Plugins → Marketplace` → 搜索 **DeepSeek Harness** → Install → 重启 IDE。
+
+**方式二：本地安装**
 1. 构建插件（见下），或直接使用 `build/distributions/` 中产出的 zip。
 2. Android Studio 中：`File → Settings → Plugins → ⚙ → Install Plugin from Disk…`，选择 zip 文件，重启 IDE。
 3. 菜单 `Tools → DeepSeek Harness`，或右侧工具窗口栏点击 “DeepSeek Harness” 图标。
 
 ## 使用
+
+### 快速开始（三步）
+
+1. **打开**：`Tools → DeepSeek Harness`，或点击右侧工具窗口栏的蓝色六边形图标。
+2. **连接/启动**：若本机已运行 `dsh web`（默认 `http://127.0.0.1:3080`）会自动连接；否则点工具栏 **▶** 自动启动（需 Node.js 18+，首次运行会自动安装 DeepSeek Harness）。
+3. **配置模型并开用**：在 Harness 界面 `Settings → Models` 填入 API Key（如 DeepSeek 官方 Key），新建会话、选模型，开始对话/写代码。
 
 | 操作 | 说明 |
 |---|---|
