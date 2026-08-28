@@ -6,6 +6,8 @@
 
 DeepSeek Harness 是 DeepSeek 的开源编码智能体框架；`dsh web` 会在本机启动一个 Web 界面（默认 `http://127.0.0.1:3080`）。本插件把该界面嵌进 IDE 的右侧工具窗口，并负责服务器的启动 / 停止 / 状态检测，让你不必离开 IDE 即可使用 Harness。
 
+[![在 JetBrains Marketplace 安装](https://img.shields.io/badge/在%20JetBrains%20Marketplace-安装-blue?style=flat-square)](https://plugins.jetbrains.com/plugin/33569-deepseek-harness-studio)
+
 ## 功能
 
 - **内嵌浏览器工具窗口**（基于 JCEF）：工具窗口内直接显示 Harness Web 界面，实时查看对话、工具调用与产物。

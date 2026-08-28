@@ -6,6 +6,8 @@ An IntelliJ Platform plugin that opens the [DeepSeek Harness](https://github.com
 
 DeepSeek Harness is DeepSeek's open-source coding-agent framework; `dsh web` serves its web UI locally (default `http://127.0.0.1:3080`). This plugin embeds that UI into a right-hand IDE tool window and manages the server (start / stop / status), so you can use Harness without leaving the IDE.
 
+[![Install on JetBrains Marketplace](https://img.shields.io/badge/Install%20on-JetBrains%20Marketplace-blue?style=flat-square)](https://plugins.jetbrains.com/plugin/33569-deepseek-harness-studio)
+
 ## Features
 
 - **Embedded browser tool window** (JCEF): shows the Harness web UI directly, with live chat, tool calls and artifacts.
