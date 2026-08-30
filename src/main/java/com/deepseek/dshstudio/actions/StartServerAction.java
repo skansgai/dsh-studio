@@ -2,6 +2,7 @@ package com.deepseek.dshstudio.actions;
 
 import com.deepseek.dshstudio.server.DshServerManager;
 import com.intellij.openapi.actionSystem.AnAction;
+import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.project.Project;
 import com.intellij.ui.IconManager;
@@ -19,6 +20,12 @@ public final class StartServerAction extends AnAction {
                 "Start the DeepSeek Harness web server",
                 IconManager.getInstance().getIcon("/icons/dsh-start.svg", StartServerAction.class));
         this.project = project;
+    }
+
+    @Override
+    public @NotNull ActionUpdateThread getActionUpdateThread() {
+        // update() 里会调用 isReachable() 等网络探测，必须在后台线程执行
+        return ActionUpdateThread.BGT;
     }
 
     @Override

@@ -8,3 +8,7 @@ local.properties
 # 签名/发布密钥（绝不提交）
 signing.local.properties
 signing.local/
+# IntelliJ Platform Gradle Plugin 2.x 生成的本地缓存目录
+.intellijPlatform/
+# WorkBuddy 项目内部记忆与运行数据（含本地路径，不提交）
+.workbuddy/

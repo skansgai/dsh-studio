@@ -15,6 +15,10 @@ DeepSeek Harness is DeepSeek's open-source coding-agent framework; `dsh web` ser
 - **Status detection**: periodic health probes with a color-coded status bar (green=connected / orange=starting / red=failed / gray=stopped). An externally running instance (e.g. Harness started in your terminal) is detected automatically and connected directly.
 - **Server log panel**: live stdout/stderr from `dsh web` for troubleshooting startup failures, port conflicts, etc.
 - **Open in system browser**: opens the same URL in your default browser.
+- **Send code to Harness**: right-click in the editor and `Send Code to Harness…` to send the selection (or the whole file) along with an editable instruction to a Harness session; auto-starts the server if needed and opens the tool window.
+- **Status bar widget**: a colored Harness server indicator at the bottom status bar (green=connected / orange=starting / red=failed / gray=stopped); click to open the tool window.
+- **Recent sessions**: `Tools → DeepSeek Harness → Recent Harness Sessions…` opens a search-style session list; picking one copies its sessionId and opens the tool window.
+- **Headless tasks**: `Tools → DeepSeek Harness → Run Headless Task…` runs a one-shot `dsh --profile headless` task inside the IDE, output goes to the Server Log.
 - **Configurable**: URL, port, start command, working directory (workspace root), `DSH_HOME`, auto-start, embedded browser toggle.
 
 ## Compatibility
@@ -51,6 +55,13 @@ DeepSeek Harness is DeepSeek's open-source coding-agent framework; `dsh web` ser
 | Open in browser | 🌐 toolbar button |
 | View logs | the "Server Log" tab at the bottom of the tool window |
 
+### New features in 0.2.0
+
+- **Send code to Harness**: select code in the editor (or nothing to send the whole file), right-click → `DeepSeek Harness → Send Code to Harness…`. In the dialog you can edit the instruction sent to the agent; on OK the plugin ensures the server is running, submits the code as a prompt to a Harness session, and opens the tool window. First use triggers `npx --yes @deepseek-ai/dsh` (≈284MB / 14 min download); a "starting" status in the status bar during that time is normal.
+- **Status bar widget**: a DSH status control on the bottom-right status bar, initially "not connected". Click it to open the Harness tool window; it turns green ("running") once the server is ready.
+- **Recent sessions**: `Tools → DeepSeek Harness → Recent Harness Sessions…` opens the session list; picking one copies its sessionId to the clipboard and opens the tool window (note: the dsh web UI does not support session deep links yet, so we jump via "copy ID + open tool window").
+- **Headless tasks**: `Tools → DeepSeek Harness → Run Headless Task…` runs `dsh --profile headless "task"` in the background, output streamed to the Server Log.
+
 ### Settings (Settings → Tools → DeepSeek Harness)
 
 | Setting | Default | Description |
@@ -83,7 +94,7 @@ gradlew.bat buildPlugin
 ./gradlew buildPlugin
 ```
 
-Output: `build/distributions/dsh-studio-0.1.0.zip`.
+Output: `build/distributions/dsh-studio-0.2.0.zip` (unsigned) / `dsh-studio-0.2.0-signed.zip` (signed; upload this one to the Marketplace).
 
 ### Choosing the build target
 
@@ -117,42 +128,9 @@ gradlew.bat test           # unit tests (DshUtil pure logic)
 
 ### About the IntelliJ Gradle Plugin version
 
-This project uses IntelliJ Gradle Plugin **1.17.4** (stable, verified). The build prints "1.x does not support 242+" — that is an informational warning; 1.17.4 builds and runs fine on 2024.2+ platforms (including Android Studio 2024.2).
+This project uses **IntelliJ Platform Gradle Plugin 2.18.1** (the official 2.x line), building against IntelliJ Community 2024.2.3 and targeting 231+ platforms (Android Studio 2023.1+ and IDEA 2023.1+). The 2.x line requires Gradle 9.0.0+; the bundled wrapper has been upgraded to Gradle 9.7.1 (in China you can switch to the Tencent Cloud mirror to speed up the download).
 
-If your Android Studio is newer (e.g. 2025.x, platform 251+) and the build fails, upgrade to the official **IntelliJ Platform Gradle Plugin 2.x** and migrate `build.gradle.kts`:
-
-```kotlin
-plugins {
-    java
-    id("org.jetbrains.intellij.platform") version "2.1.0"
-}
-
-repositories {
-    mavenCentral()
-    intellijPlatform {
-        defaultRepositories()
-    }
-}
-
-dependencies {
-    intellijPlatform {
-        // pick one:
-        // androidStudio("2024.2.1.12")   // build against Android Studio
-        intellijIdeaCommunity("2024.2.3") // or IntelliJ Community (small)
-        instrumentationTools()
-    }
-}
-
-intellijPlatform {
-    pluginConfiguration {
-        version = project.version.toString()
-        ideaVersion { sinceBuild = "231" }
-    }
-    buildSearchableOptions = false
-}
-```
-
-No other changes are needed (source, `plugin.xml`, icons stay the same; `plugin.xml` already declares `since-build="231"` and does not rely on Gradle injection).
+The plugin descriptor `plugin.xml` already declares `since-build="231"` directly and does not rely on Gradle injection; to target a newer platform, change the version and `pluginConfiguration.ideaVersion.sinceBuild` in `build.gradle.kts`.
 
 ## JCEF notes
 
@@ -182,6 +160,10 @@ src/main/resources/
 ├── META-INF/plugin.xml              # plugin descriptor
 └── icons/                           # icons (SVG)
 ```
+
+## Changelog
+
+Full version history (features, fixes, build changes) is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Publishing
 

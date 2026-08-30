@@ -1,6 +1,7 @@
 package com.deepseek.dshstudio.actions;
 
 import com.deepseek.dshstudio.DshStudioConstants;
+import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.project.Project;
@@ -18,6 +19,12 @@ public final class OpenDshToolWindowAction extends AnAction {
         super("DeepSeek Harness",
                 "Open the DeepSeek Harness tool window",
                 IconManager.getInstance().getIcon("/icons/dsh-toolwindow.svg", OpenDshToolWindowAction.class));
+    }
+
+    @Override
+    public @NotNull ActionUpdateThread getActionUpdateThread() {
+        // 无 update() 覆写、也不做任何阻塞操作，EDT 即可
+        return ActionUpdateThread.EDT;
     }
 
     @Override

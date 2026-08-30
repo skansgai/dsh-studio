@@ -79,10 +79,10 @@ gradlew.bat buildPlugin
 gradlew.bat signPlugin   # requires the certificate from step 3
 ```
 
-The signed distribution is `build/distributions/dsh-studio-0.1.0-signed.zip` (`signPlugin` produces a separate `-signed.zip` and leaves the unsigned one untouched). **Upload this `-signed.zip` to the marketplace.**
+The signed distribution is `build/distributions/dsh-studio-0.2.0-signed.zip` (`signPlugin` produces a separate `-signed.zip` and leaves the unsigned one untouched). **Upload this `-signed.zip` to the marketplace.**
 
 > You can verify the signature with the official tool: find `marketplace-zip-signer-cli-0.1.43.jar` in the Gradle cache and run
-> `java -jar marketplace-zip-signer-cli-0.1.43.jar verify -cert chain.crt -in dsh-studio-0.1.0-signed.zip`.
+> `java -jar marketplace-zip-signer-cli-0.1.43.jar verify -cert chain.crt -in dsh-studio-0.2.0-signed.zip`.
 > Exit code 0 means the signature is valid.
 
 > Or do it in one step: `gradlew.bat buildPlugin signPlugin`.
@@ -98,7 +98,7 @@ The signed distribution is `build/distributions/dsh-studio-0.1.0-signed.zip` (`s
    - **Tags**: `deepseek`, `harness`, `android studio`, `ai`, etc.
    - **Compatibility**: read automatically (since-build 231 = Android Studio 2023.1+ / IDEA 2023.1+)
    - **Screenshots**: 1–3 tool-window screenshots recommended (in AS, open the tool window and press Win+Shift+S)
-3. Upload `build/distributions/dsh-studio-0.1.0-signed.zip` and click **Add the plugin**.
+3. Upload `build/distributions/dsh-studio-0.2.0-signed.zip` and click **Add the plugin**.
 
 ## 6. Wait for review
 
@@ -125,7 +125,7 @@ gradlew.bat runPluginVerifier     # deep compatibility check (configure verifier
 
 ## Notes
 
-- **Versions must increase**: the marketplace rejects re-uploading the same version. Bump it in `build.gradle.kts` (`version = "0.1.0"`).
+- **Versions must increase**: the marketplace rejects re-uploading the same version. Bump it in `build.gradle.kts` (`version = "0.2.0"`).
 - **Private key safety**: never commit `private.pem` or the token to git or share them; a leak lets someone impersonate you. Keep cert files in the gitignored `signing.local/` directory.
 - **plugin.xml vendor info**: the author is set to `Yang SongSong`, email `yangsongsong66@gmail.com`. To change, edit `src/main/resources/META-INF/plugin.xml` and re-run `gradlew buildPlugin signPlugin`.
 - **until-build**: this project intentionally has no until-build, i.e. compatible with all future versions (marketplace-recommended). To restrict, add `<idea-version until-build="253.*"/>` to plugin.xml.

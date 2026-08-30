@@ -142,6 +142,7 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         group.add(new StartServerAction(project));
         group.add(new StopServerAction(project));
         group.add(Separator.getInstance());
+        group.add(new com.deepseek.dshstudio.actions.DshSessionsPopupAction());
         group.add(new OpenInBrowserAction(project));
         group.add(new RefreshAction(project, this::reloadPage));
 
@@ -239,12 +240,23 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         if (!embeddedEnabled || browser == null) {
             return;
         }
-        String url = manager.getUrl();
+        String url = browserUrl();
         if (!url.equals(loadedUrl)) {
             loadedUrl = url;
             browser.loadURL(url);
             injectPageTheme();
         }
+    }
+
+    /**
+     * 内嵌浏览器要加载的地址。
+     * <p>
+     * dsh 0.1.1-rc.2 的访问控制是 Host 头信任围栏（防 DNS rebinding），
+     * 既没有 token 也没有 Cookie：从 127.0.0.1 / localhost 发起的请求直接放行，
+     * 所以这里不需要拼任何凭证。
+     */
+    public String browserUrl() {
+        return manager.getUrl();
     }
 
     /**

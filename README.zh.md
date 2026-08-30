@@ -15,6 +15,10 @@ DeepSeek Harness 是 DeepSeek 的开源编码智能体框架；`dsh web` 会在�
 - **状态检测**：定时健康探测，状态栏以颜色指示（绿=已连接 / 橙=启动中 / 红=失败 / 灰=未启动）；已存在外部运行的实例时会自动识别并直接连接（如：Harness 已在你终端里运行时）。
 - **服务器日志面板**：实时展示 `dsh web` 的 stdout/stderr，方便排查启动失败、端口占用等问题。
 - **系统浏览器打开**：工具栏按钮可在默认浏览器中打开同一地址。
+- **发送代码到 Harness**：编辑器选中代码 → 右键 → `Send Code to Harness…`，把选区（或整个文件）连同可编辑的指令一并发给 Harness 会话；服务器未运行会自动拉起，发送后自动打开工具窗口。
+- **状态栏小部件**：窗口底部状态栏显示彩色 Harness 服务器状态（绿=已连接 / 橙=启动中 / 红=失败 / 灰=未启动），点击即打开工具窗口。
+- **会话快速访问**：`Tools → DeepSeek Harness → Recent Harness Sessions…` 弹出搜索式会话列表，选中一项即把 sessionId 复制到剪贴板并打开工具窗口。
+- **Headless 任务**：`Tools → DeepSeek Harness → Run Headless Task…` 在 IDE 内直接跑一次性 `dsh --profile headless` 任务，输出进入 Server Log。
 - **可配置**：地址、端口、启动命令、工作目录（workspace 根目录）、`DSH_HOME`、是否自动启动、是否使用内嵌浏览器。
 
 ## 兼容性
@@ -51,6 +55,13 @@ DeepSeek Harness 是 DeepSeek 的开源编码智能体框架；`dsh web` 会在�
 | 系统浏览器打开 | 工具栏 🌐 按钮 |
 | 查看日志 | 工具窗口底部 “Server Log” 标签页 |
 
+### 0.2.0 新功能使用方式
+
+- **发送代码到 Harness**：在编辑器里选中一段代码（不选中则发送整个文件），右键 → `DeepSeek Harness → Send Code to Harness…`。弹窗里可编辑附带给 agent 的指令，点 OK 后插件会确保服务器在运行、把代码作为 prompt 提交到 Harness 会话，并自动打开工具窗口。首次使用会触发 `npx --yes @deepseek-ai/dsh` 下载（约 284MB / 14 分钟），期间状态栏显示“启动中”属正常。
+- **状态栏小部件**：窗口底部状态栏右侧有一个 DSH 状态控件，初态“未连接”。点击它可打开 Harness 工具窗口；服务器就绪后变为“运行中”（绿色）。
+- **会话快速访问**：`Tools → DeepSeek Harness → Recent Harness Sessions…` 弹出当前会话列表，选中一项会把该会话的 sessionId 复制到剪贴板并打开工具窗口（注：dsh Web 前端暂不支持会话深链，因此以“复制 ID + 打开工具窗口”方式跳转）。
+- **Headless 任务**：`Tools → DeepSeek Harness → Run Headless Task…` 输入任务描述，插件以 `dsh --profile headless "任务"` 方式在后台运行，输出实时写入 Server Log。
+
 ### 设置（Settings → Tools → DeepSeek Harness）
 
 | 配置项 | 默认值 | 说明 |
@@ -83,7 +94,7 @@ gradlew.bat buildPlugin
 ./gradlew buildPlugin
 ```
 
-产物：`build/distributions/dsh-studio-0.1.0.zip`。
+产物：`build/distributions/dsh-studio-0.2.0.zip`（未签名）/ `dsh-studio-0.2.0-signed.zip`（已签名，上传市场用这个）。
 
 ### 构建目标选择
 
@@ -117,42 +128,9 @@ gradlew.bat test           # 单元测试（DshUtil 纯逻辑）
 
 ### 关于 IntelliJ Gradle Plugin 版本
 
-本项目使用 IntelliJ Gradle Plugin **1.17.4**（稳定、已验证）。构建时它会提示 “1.x does not support 242+”——这是提示性警告，1.17.4 针对 2024.2+ 平台（含 Android Studio 2024.2）仍可正常构建运行。
+本项目使用 **IntelliJ Platform Gradle Plugin 2.18.1**（官方 2.x 线），构建目标为 IntelliJ Community 2024.2.3，兼容 231+ 平台（含 Android Studio 2023.1+ 与 IDEA 2023.1+）。2.x 要求 Gradle 9.0.0+，仓库自带 wrapper 已升级到 Gradle 9.7.1（国内可改用腾讯云镜像加速下载）。
 
-如果你的 Android Studio 更新（如 2025.x，platform 251+）且构建报错，可升级到官方的 **IntelliJ Platform Gradle Plugin 2.x**，把 `build.gradle.kts` 迁移为：
-
-```kotlin
-plugins {
-    java
-    id("org.jetbrains.intellij.platform") version "2.1.0"
-}
-
-repositories {
-    mavenCentral()
-    intellijPlatform {
-        defaultRepositories()
-    }
-}
-
-dependencies {
-    intellijPlatform {
-        // 二选一：
-        // androidStudio("2024.2.1.12")   // 直接针对 Android Studio
-        intellijIdeaCommunity("2024.2.3") // 或 IntelliJ Community（体积小）
-        instrumentationTools()
-    }
-}
-
-intellijPlatform {
-    pluginConfiguration {
-        version = project.version.toString()
-        ideaVersion { sinceBuild = "231" }
-    }
-    buildSearchableOptions = false
-}
-```
-
-其余源码、`plugin.xml` 与图标无需改动（`plugin.xml` 已直接声明 `since-build="231"`，不依赖 Gradle 注入）。
+插件描述符 `plugin.xml` 已直接声明 `since-build="231"`，不依赖 Gradle 注入；如需面向更高平台，修改 `build.gradle.kts` 里的版本与 `pluginConfiguration.ideaVersion.sinceBuild` 即可。
 
 ## JCEF 说明
 
@@ -182,6 +160,10 @@ src/main/resources/
 ├── META-INF/plugin.xml              # 插件描述符
 └── icons/                           # 图标（SVG）
 ```
+
+## 更新日志
+
+完整版本变更（新增功能、修复、构建变更）见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 发布到插件市场
 

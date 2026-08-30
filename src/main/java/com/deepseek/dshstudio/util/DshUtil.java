@@ -275,4 +275,70 @@ public final class DshUtil {
         }
         return new File(path.trim()).getAbsolutePath();
     }
+
+    // ── 编辑器集成辅助 ─────────────────────────────────────────────────────
+
+    /**
+     * 组装发送给 Harness 的提示词：指令 + 文件定位 + 代码块 + 可选补充说明。
+     */
+    public static String buildCodePrompt(@NotNull String instruction,
+                                         @Nullable String filePath,
+                                         int startLine,
+                                         int endLine,
+                                         @NotNull String code,
+                                         @Nullable String language,
+                                         @Nullable String extraNote) {
+        StringBuilder prompt = new StringBuilder(instruction).append("\n\n");
+        if (filePath != null && !filePath.trim().isEmpty()) {
+            prompt.append("文件: ").append(filePath.trim());
+            if (startLine > 0 && endLine >= startLine) {
+                prompt.append("（第 ").append(startLine).append("-").append(endLine).append(" 行）");
+            }
+            prompt.append("\n");
+        }
+        prompt.append("```");
+        if (language != null && !language.trim().isEmpty()) {
+            prompt.append(language.trim());
+        }
+        prompt.append("\n").append(code).append("\n```\n");
+        if (extraNote != null && !extraNote.trim().isEmpty()) {
+            prompt.append(extraNote.trim()).append("\n");
+        }
+        return prompt.toString();
+    }
+
+    /** 从 dsh 启动输出行中提取 launch token；无则返回 null。 */
+    @Nullable
+    public static String extractLaunchToken(String line) {
+        if (line == null || !line.contains("token=")) {
+            return null;
+        }
+        java.util.regex.Matcher matcher =
+                java.util.regex.Pattern.compile(DshStudioConstants.TOKEN_REGEX).matcher(line);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+
+    /** 相对时间描述（用于会话列表），如 "3 分钟前"。 */
+    public static String relativeTime(long epochMs) {
+        if (epochMs <= 0) {
+            return "未知时间";
+        }
+        long diff = System.currentTimeMillis() - epochMs;
+        if (diff < 0) {
+            return "刚刚";
+        }
+        long seconds = diff / 1000;
+        if (seconds < 60) {
+            return "刚刚";
+        }
+        long minutes = seconds / 60;
+        if (minutes < 60) {
+            return minutes + " 分钟前";
+        }
+        long hours = minutes / 60;
+        if (hours < 24) {
+            return hours + " 小时前";
+        }
+        return (hours / 24) + " 天前";
+    }
 }

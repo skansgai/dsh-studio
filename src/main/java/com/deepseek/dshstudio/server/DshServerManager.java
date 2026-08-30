@@ -48,6 +48,9 @@ public final class DshServerManager {
     private volatile boolean startAttempted;
     @Nullable
     private volatile Process process;
+    /** dsh 启动输出中捕获的浏览器鉴权 token（形如 ?token=xxx），供 DshApiClient 交换 Cookie。 */
+    @Nullable
+    private volatile String launchToken;
 
     private DshServerManager(@NotNull Project project) {
         this.project = project;
@@ -77,6 +80,12 @@ public final class DshServerManager {
     /** 当前连接地址。 */
     public String getUrl() {
         return DshSettingsState.getInstance().normalizedServerUrl();
+    }
+
+    /** 本插件启动的进程打印的 launch token（未捕获到时为 null）。 */
+    @Nullable
+    public String getLaunchToken() {
+        return launchToken;
     }
 
     // ── 启动 / 停止 ────────────────────────────────────────────────────────
@@ -127,18 +136,20 @@ public final class DshServerManager {
                     pb.environment().put("DSH_HOME", settings.dshHome.trim());
                 }
                 appendLog("$ " + String.join(" ", command) + "   (cwd: " + workdir + ")\n");
+                launchToken = null;
                 Process p = pb.start();
                 process = p;
                 startAttempted = true;
                 setState(ServerState.STARTING);
 
-                // 输出流 → 日志
+                // 输出流 → 日志（顺带捕获 launch token）
                 ApplicationManager.getApplication().executeOnPooledThread(() -> {
                     try (BufferedReader reader = new BufferedReader(
                             new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
                             appendLog(line + "\n");
+                            captureLaunchToken(line);
                         }
                     } catch (IOException ignored) {
                         // 进程结束
@@ -158,14 +169,19 @@ public final class DshServerManager {
                     }
                 });
 
-                // 看门狗：启动超时
+                // 看门狗：启动期间主动探测就绪（否则状态机会一直停在 STARTING，
+                // 导致"发送代码"等需要等待就绪的功能永远等不到 RUNNING）
                 ApplicationManager.getApplication().executeOnPooledThread(() -> {
                     long deadline = System.currentTimeMillis() + DshStudioConstants.START_WATCHDOG_MS;
                     while (System.currentTimeMillis() < deadline
                             && state == ServerState.STARTING
                             && isManagedProcessAlive()) {
+                        probe(); // 探测到可达会把 state 置为 RUNNING
+                        if (state == ServerState.RUNNING) {
+                            return;
+                        }
                         try {
-                            Thread.sleep(1000);
+                            Thread.sleep(DshStudioConstants.HEALTH_POLL_MS);
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
                             return;
@@ -247,6 +263,11 @@ public final class DshServerManager {
         }
     }
 
+    /** 供外部（如 headless 任务运行器）向日志面板追加内容并触发 UI 刷新。 */
+    public void appendExternalLog(String chunk) {
+        appendLog(chunk);
+    }
+
     public void clearLog() {
         synchronized (lock) {
             log.setLength(0);
@@ -276,13 +297,32 @@ public final class DshServerManager {
         return name.equals("npx") || name.equals("npx.cmd");
     }
 
+    /** 从一行启动输出中提取 launch token（首次捕获即记下）。 */
+    private void captureLaunchToken(String line) {
+        if (line == null || launchToken != null || !line.contains("token=")) {
+            return;
+        }
+        java.util.regex.Matcher matcher =
+                java.util.regex.Pattern.compile(DshStudioConstants.TOKEN_REGEX).matcher(line);
+        if (matcher.find()) {
+            launchToken = matcher.group(1);
+        }
+    }
+
     // ── 通知 ──────────────────────────────────────────────────────────────
 
     private void setState(ServerState next) {
         if (next == state) {
             return;
         }
+        ServerState previous = state;
         state = next;
+        // 启动后首次就绪：给一个不打扰的气球通知（工具窗口未打开时尤其有用）
+        if (next == ServerState.RUNNING && previous == ServerState.STARTING && isManagedProcessAlive()) {
+            notifyBalloon("DeepSeek Harness 服务器已就绪",
+                    "地址：" + getUrl() + "<br>点击右侧工具窗口图标或状态栏图标开始使用。",
+                    NotificationType.INFORMATION);
+        }
         fireState(next);
     }
 

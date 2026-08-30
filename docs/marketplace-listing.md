@@ -59,6 +59,10 @@ Open the **DeepSeek Harness** web UI right inside **Android Studio** / **Intelli
 - One-click start / stop of the local `dsh web` server (Node.js / npx based, customizable command)
 - Automatic server status detection with a colored status bar and live polling
 - Server log panel for troubleshooting startup problems
+- **Send code to Harness**: right-click in the editor to send the selection (or whole file) to a session
+- **Status bar widget**: a colored server-state indicator; click to open the tool window
+- **Recent sessions**: a search-style popup to jump to any Harness session
+- **Headless tasks**: run a one-shot `dsh --profile headless` task from the IDE
 - Open the same page in your system browser at any time
 - Configurable URL / port / working directory (workspace root) / `DSH_HOME`
 
@@ -93,6 +97,10 @@ DeepSeek Harness is DeepSeek's open-source coding agent framework; this plugin i
 - 一键启动 / 停止本地 `dsh web` 服务器（基于 Node.js / npx，可自定义命令）
 - 服务器状态自动检测，状态栏彩色指示 + 定时刷新
 - 服务器日志面板，方便排查问题
+- **发送代码到 Harness**：编辑器右键把选中代码（或整个文件）发给会话
+- **状态栏小部件**：彩色服务器状态指示，点击打开工具窗口
+- **会话快速访问**：搜索式弹窗跳转到任意 Harness 会话
+- **Headless 任务**：在 IDE 内运行一次性 `dsh --profile headless` 任务
 - 可随时在系统浏览器中打开同一页面
 - 可配置地址 / 端口 / 工作目录（workspace 根目录）/ `DSH_HOME`
 

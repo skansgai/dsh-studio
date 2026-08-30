@@ -3,6 +3,7 @@ package com.deepseek.dshstudio.actions;
 import com.deepseek.dshstudio.server.DshServerManager;
 import com.intellij.icons.AllIcons;
 import com.intellij.openapi.actionSystem.AnAction;
+import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.project.Project;
 import org.jetbrains.annotations.NotNull;
@@ -19,6 +20,12 @@ public final class RefreshAction extends AnAction {
         super("Refresh", "Re-check the server status and reload the page", AllIcons.Actions.Refresh);
         this.project = project;
         this.reload = reload;
+    }
+
+    @Override
+    public @NotNull ActionUpdateThread getActionUpdateThread() {
+        // update() 里会调用 isReachable() 等网络探测，必须在后台线程执行
+        return ActionUpdateThread.BGT;
     }
 
     @Override

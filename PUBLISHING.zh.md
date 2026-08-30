@@ -79,10 +79,10 @@ gradlew.bat buildPlugin
 gradlew.bat signPlugin   # 需先按 ③ 提供证书
 ```
 
-签名后的分发包是 `build/distributions/dsh-studio-0.1.0-signed.zip`（`signPlugin` 会另外生成 `-signed.zip`，不会改动未签名版本）。**上传市场时请用这个 `-signed.zip`**。
+签名后的分发包是 `build/distributions/dsh-studio-0.2.0-signed.zip`（`signPlugin` 会另外生成 `-signed.zip`，不会改动未签名版本）。**上传市场时请用这个 `-signed.zip`**。
 
 > 你可以用官方工具验证签名：在 Gradle 缓存中找到 `marketplace-zip-signer-cli-0.1.43.jar`，执行
-> `java -jar marketplace-zip-signer-cli-0.1.43.jar verify -cert chain.crt -in dsh-studio-0.1.0-signed.zip`，
+> `java -jar marketplace-zip-signer-cli-0.1.43.jar verify -cert chain.crt -in dsh-studio-0.2.0-signed.zip`，
 > 退出码 0 表示签名有效。
 
 > 也可以一步完成：`gradlew.bat buildPlugin signPlugin`。
@@ -98,7 +98,7 @@ gradlew.bat signPlugin   # 需先按 ③ 提供证书
    - **Tags**：`deepseek`、`harness`、`android studio`、`ai` 等
    - **Compatibility**：自动读取（since-build 231 = Android Studio 2023.1+ / IDEA 2023.1+）
    - **Screenshots**：建议上传 1–3 张工具窗口截图（本机可先截图：AS 里打开工具窗口后 Win+Shift+S）
-3. 上传 `build/distributions/dsh-studio-0.1.0-signed.zip`，点 **Add the plugin**。
+3. 上传 `build/distributions/dsh-studio-0.2.0-signed.zip`，点 **Add the plugin**。
 
 ## ⑥ 等待审核
 
@@ -125,7 +125,7 @@ gradlew.bat runPluginVerifier     # 深度兼容性验证（需在 build.gradle.
 
 ## 注意事项
 
-- **版本号必须递增**：市场拒绝相同版本号的重复上传。改版本号：修改 `build.gradle.kts` 的 `version = "0.1.0"`。
+- **版本号必须递增**：市场拒绝相同版本号的重复上传。改版本号：修改 `build.gradle.kts` 的 `version = "0.2.0"`。
 - **私钥安全**：`private.pem` 和 token 不要提交到 git、不要发到群里；泄露=他人可冒充你发布。证书文件用 `.gitignore` 里的 `signing.local/` 目录存放。
 - **plugin.xml 的 vendor 信息**：作者名已设为 `Yang SongSong`，邮箱已填 `yangsongsong66@gmail.com`。如需更换，直接改 `src/main/resources/META-INF/plugin.xml` 后重新 `gradlew buildPlugin signPlugin` 即可。
 - **until-build**：本项目不设置 until-build，即兼容所有未来版本（市场推荐做法）；如需限制可在 plugin.xml 加 `<idea-version until-build="253.*"/>`。

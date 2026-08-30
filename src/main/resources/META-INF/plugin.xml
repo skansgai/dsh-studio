@@ -11,8 +11,12 @@
   <li>One-click start / stop of the local <code>dsh web</code> server (Node.js / npx based, customizable command)</li>
   <li>Automatic server status detection with a colored status bar and live polling</li>
   <li>Server log panel for troubleshooting startup problems</li>
+  <li><b>Send code to Harness</b>: right-click in the editor and send the selection (or the whole file) to a session</li>
+  <li><b>Status bar widget</b>: colored indicator of the Harness server state, click to open the tool window</li>
+  <li><b>Recent sessions</b>: search-style popup listing Harness sessions, jump straight to one</li>
+  <li><b>Headless tasks</b>: run a one-shot <code>dsh --profile headless</code> task from the IDE, output lands in the Server Log</li>
   <li>Open the same page in your system browser at any time</li>
-  <li>Configurable URL / port / working directory (workspace root) / <code>DSH_HOME</code></li>
+  <li>Configurable URL / port / working directory (workspace root) / <code>DSH_HOME</code> / auth token</li>
 </ul>
 
 <h3>Quick Start</h3>
@@ -37,6 +41,8 @@
 ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
+    <!-- JCEF 内嵌浏览器（JBCefBrowser）必须声明此依赖，否则真实 IDE 中插件类加载器找不到 com.intellij.ui.jcef 包 -->
+    <depends>com.intellij.modules.jcef</depends>
 
     <!-- since-build 231 = Android Studio 2023.1+ / IntelliJ IDEA 2023.1+; no until-build so future versions are allowed -->
     <idea-version since-build="231"/>
@@ -44,6 +50,7 @@
     <extensions defaultExtensionNs="com.intellij">
         <applicationService serviceImplementation="com.deepseek.dshstudio.settings.DshSettingsState"/>
         <projectService serviceImplementation="com.deepseek.dshstudio.server.DshServerManager"/>
+        <projectService serviceImplementation="com.deepseek.dshstudio.server.DshApiClient"/>
         <applicationConfigurable parentId="tools"
                                  instance="com.deepseek.dshstudio.settings.DshSettingsConfigurable"
                                  id="com.deepseek.dshstudio.settings"
@@ -54,15 +61,37 @@
                     icon="/icons/dsh-toolwindow.svg"
                     factoryClass="com.deepseek.dshstudio.ui.DshToolWindowFactory"/>
         <notificationGroup id="DshStudio.Notifications" displayType="BALLOON"/>
+        <statusBarWidgetFactory id="DshStudio.StatusBarWidget"
+                                implementation="com.deepseek.dshstudio.ui.DshStatusBarWidgetFactory"/>
     </extensions>
 
     <actions>
-        <action id="DshStudio.OpenToolWindow"
-                class="com.deepseek.dshstudio.actions.OpenDshToolWindowAction"
-                text="DeepSeek Harness"
-                description="Open the DeepSeek Harness tool window"
-                icon="/icons/dsh-toolwindow.svg">
+        <!-- 编辑器右键菜单：发送选中代码到 Harness -->
+        <group id="DshStudio.EditorGroup" popup="true" text="DeepSeek Harness" icon="/icons/dsh-toolwindow.svg">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <action id="DshStudio.SendCodeToHarness"
+                    class="com.deepseek.dshstudio.actions.DshSendCodeAction"
+                    text="Send Code to Harness…"
+                    description="Send the selected code (or the whole file) to a DeepSeek Harness session"/>
+        </group>
+
+        <!-- Tools 菜单统一分组 -->
+        <group id="DshStudio.ToolsMenuGroup" popup="true" text="DeepSeek Harness" icon="/icons/dsh-toolwindow.svg">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
-        </action>
+            <action id="DshStudio.OpenToolWindow"
+                    class="com.deepseek.dshstudio.actions.OpenDshToolWindowAction"
+                    text="DeepSeek Harness"
+                    description="Open the DeepSeek Harness tool window"
+                    icon="/icons/dsh-toolwindow.svg"/>
+            <action id="DshStudio.SessionsPopup"
+                    class="com.deepseek.dshstudio.actions.DshSessionsPopupAction"
+                    text="Recent Harness Sessions…"
+                    description="List and jump to a DeepSeek Harness session"/>
+            <separator/>
+            <action id="DshStudio.HeadlessTask"
+                    class="com.deepseek.dshstudio.actions.DshHeadlessTaskAction"
+                    text="Run Headless Task…"
+                    description="Run a one-shot dsh task without the web UI"/>
+        </group>
     </actions>
 </idea-plugin>

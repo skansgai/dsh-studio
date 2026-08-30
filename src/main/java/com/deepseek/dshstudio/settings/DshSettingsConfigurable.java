@@ -38,6 +38,7 @@ public final class DshSettingsConfigurable implements Configurable {
     private final JBTextField serverCommandField = new JBTextField();
     private final JBTextField workingDirectoryField = new JBTextField();
     private final JBTextField dshHomeField = new JBTextField();
+    private final JBTextField serverTokenField = new JBTextField();
     private final JCheckBox autoStartCheckBox = new JCheckBox("打开工具窗口时自动启动服务器（若尚未运行）");
     private final JCheckBox embeddedCheckBox = new JCheckBox("使用内嵌浏览器（JCEF）显示界面");
     private final JComboBox<DshUiTheme> themeCombo = new JComboBox<>(DshUiTheme.values());
@@ -107,6 +108,14 @@ public final class DshSettingsConfigurable implements Configurable {
         c.gridy = row++;
         c.gridx = 0;
         c.weightx = 0;
+        form.add(new JBLabel("服务器 Token（可选）:"), c);
+        c.gridx = 1;
+        c.weightx = 1;
+        form.add(serverTokenField, c);
+
+        c.gridy = row++;
+        c.gridx = 0;
+        c.weightx = 0;
         form.add(new JBLabel("界面主题:"), c);
         c.gridx = 1;
         c.weightx = 1;
@@ -144,7 +153,9 @@ public final class DshSettingsConfigurable implements Configurable {
                         "<b>启动命令</b>：留空使用默认 <code>npx --yes @deepseek-ai/dsh web --host {host} --port {port}</code>；" +
                         "支持占位符 <code>{host} {port} {workdir} {dshHome}</code>。<br>" +
                         "<b>工作目录</b>：留空则使用当前项目目录（作为 Harness 的 workspace 根目录）。<br>" +
-                        "<b>DSH_HOME</b>：留空则使用 <code>~/.dsh</code>（可通过环境变量覆盖）。" +
+                        "<b>DSH_HOME</b>：留空则使用 <code>~/.dsh</code>（可通过环境变量覆盖）。<br>" +
+                        "<b>服务器 Token</b>：连接非本插件启动的服务器时，从其启动输出里的 <code>?token=…</code> " +
+                        "复制 token 到此处，即可使用「发送代码」「会话列表」等 IDE 内操作；本插件自己启动的服务器无需填写。" +
                         "</div></html>");
         c.gridy = row++;
         c.gridx = 0;
@@ -205,6 +216,7 @@ public final class DshSettingsConfigurable implements Configurable {
                 || !serverCommandField.getText().equals(state.serverCommand)
                 || !workingDirectoryField.getText().equals(state.workingDirectory)
                 || !dshHomeField.getText().equals(state.dshHome)
+                || !serverTokenField.getText().trim().equals(state.serverAuthToken)
                 || autoStartCheckBox.isSelected() != state.autoStartServer
                 || embeddedCheckBox.isSelected() != state.useEmbeddedBrowser
                 || !((DshUiTheme) themeCombo.getSelectedItem()).id.equals(state.uiTheme)
@@ -219,6 +231,7 @@ public final class DshSettingsConfigurable implements Configurable {
         state.serverCommand = serverCommandField.getText().trim();
         state.workingDirectory = workingDirectoryField.getText().trim();
         state.dshHome = dshHomeField.getText().trim();
+        state.serverAuthToken = serverTokenField.getText().trim();
         state.autoStartServer = autoStartCheckBox.isSelected();
         state.useEmbeddedBrowser = embeddedCheckBox.isSelected();
         state.uiTheme = ((DshUiTheme) themeCombo.getSelectedItem()).id;
@@ -233,6 +246,7 @@ public final class DshSettingsConfigurable implements Configurable {
         serverCommandField.setText(state.serverCommand);
         workingDirectoryField.setText(state.workingDirectory);
         dshHomeField.setText(state.dshHome);
+        serverTokenField.setText(state.serverAuthToken);
         autoStartCheckBox.setSelected(state.autoStartServer);
         embeddedCheckBox.setSelected(state.useEmbeddedBrowser);
         themeCombo.setSelectedItem(DshUiTheme.fromId(state.uiTheme));

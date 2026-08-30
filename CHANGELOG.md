@@ -1,0 +1,30 @@
+# 更新日志 / Changelog
+
+本文件记录 DeepSeek Harness Studio 的版本变更。英文条目对应中文说明，保持双语一致。
+
+## 0.2.0（2026-08-30）
+
+### 新增功能 / New features
+- **发送代码到 Harness（Send Code to Harness）**：编辑器右键 `Send Code to Harness…`，把选中代码（或整个文件）连同可编辑指令发给 Harness 会话；服务器未运行会自动拉起，发送后自动打开工具窗口。
+- **状态栏小部件（Status bar widget）**：窗口底部状态栏显示彩色 Harness 服务器状态（绿=已连接 / 橙=启动中 / 红=失败 / 灰=未启动），点击即打开工具窗口。
+- **会话快速访问（Recent sessions）**：`Tools → DeepSeek Harness → Recent Harness Sessions…` 弹出搜索式会话列表，选中一项即复制 sessionId 并打开工具窗口。
+- **Headless 任务（Headless task）**：`Tools → DeepSeek Harness → Run Headless Task…` 在 IDE 内直接运行一次性 `dsh --profile headless` 任务，输出进入 Server Log。
+
+### 修复 / Fixes
+- **JCEF 模块依赖缺失**：`plugin.xml` 补 `<depends>com.intellij.modules.jcef</depends>`，修复真实 IDE 中打开工具窗口时抛 `NoClassDefFoundError: com/intellij/ui/jcef/JBCefBrowser`。
+- **发送代码“点了没反应”**：`DshServerManager` 启动看门狗改为定时 `probe()`，服务器就绪即置 `RUNNING`；`DshSendCodeAction` 异常捕获放宽到 `catch (Exception)` 并增加即时通知，消除静默失败。
+
+### 构建变更 / Build changes
+- 升级构建到 **IntelliJ Platform Gradle Plugin 2.18.1** + Gradle 9.7.1（原为 1.17.4 / 8.13）。
+- 默认启动命令增加 `--no-open`，避免内嵌 JCEF 时又弹出系统浏览器。
+- 兼容性 `since-build="231"` 不变，仍兼容 Android Studio 2023.1+ / IntelliJ IDEA 2023.1+。
+
+### 已知限制 / Known limitations
+- dsh Web 前端暂不支持会话深链，会话快速访问以“复制 ID + 打开工具窗口”方式跳转。
+- 通过 API 创建的会话默认落在 dsh 的“未分组”（不绑定 workspace），功能不受影响。
+
+---
+
+## 0.1.x
+
+早期版本提供：内嵌浏览器工具窗口（JCEF）、一键启停 `dsh web` 服务器、服务器状态自动检测、服务器日志面板、系统浏览器打开、基础配置项。详见 [README](README.zh.md)。
