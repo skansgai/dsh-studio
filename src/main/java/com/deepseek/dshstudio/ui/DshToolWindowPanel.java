@@ -22,8 +22,6 @@ import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBPanel;
 import com.intellij.ui.components.JBTabbedPane;
-import com.intellij.ui.jcef.JBCefApp;
-import com.intellij.ui.jcef.JBCefBrowser;
 import com.intellij.util.messages.MessageBusConnection;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -70,8 +68,12 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     private final Timer healthTimer;
     private final MessageBusConnection connection;
 
+    /** JCEF 浏览器实例（反射创建，类型为 Object，避免字节码直接引用 JCEF 类）。 */
     @Nullable
-    private final JBCefBrowser browser;
+    private final Object browser;
+    /** 浏览器实例对应的 Swing 组件；当 JCEF 不可用时为 null，此时使用 buildFallbackPanel()。 */
+    @Nullable
+    private final JComponent browserComponent;
     private final boolean embeddedEnabled;
 
     private volatile String loadedUrl;
@@ -83,11 +85,13 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         this.manager = DshServerManager.getInstance(project);
 
         DshSettingsState settings = DshSettingsState.getInstance();
-        this.embeddedEnabled = settings.useEmbeddedBrowser && JBCefApp.isSupported();
+        this.embeddedEnabled = settings.useEmbeddedBrowser && DshJcefSupport.isSupported();
         if (embeddedEnabled) {
-            this.browser = new JBCefBrowser();
+            this.browser = DshJcefSupport.createBrowser();
+            this.browserComponent = this.browser != null ? DshJcefSupport.getComponent(this.browser) : null;
         } else {
-            this.browser = createDisabledBrowserFallback();
+            this.browser = null;
+            this.browserComponent = null;
         }
 
         buildUi();
@@ -172,8 +176,8 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         empty.setBorder(BorderFactory.createEmptyBorder(0, 0, 24, 0));
         emptyStatePanel.add(empty, BorderLayout.SOUTH);
         browserHolder.add(emptyStatePanel, "empty");
-        if (embeddedEnabled) {
-            browserHolder.add(browser.getComponent(), "browser");
+        if (embeddedEnabled && browserComponent != null) {
+            browserHolder.add(browserComponent, "browser");
         } else {
             browserHolder.add(buildFallbackPanel(), "browser");
         }
@@ -217,10 +221,6 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         return panel;
     }
 
-    private JBCefBrowser createDisabledBrowserFallback() {
-        // 占位：embeddedEnabled=false 时不会真正创建 JCEF 浏览器
-        return null;
-    }
     // ── 运行逻辑 ──────────────────────────────────────────────────────────
 
     private void tick() {
@@ -243,7 +243,7 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         String url = browserUrl();
         if (!url.equals(loadedUrl)) {
             loadedUrl = url;
-            browser.loadURL(url);
+            DshJcefSupport.loadURL(browser, url);
             injectPageTheme();
         }
     }
@@ -278,7 +278,7 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
                 "if(document&&document.documentElement){"
                 + "document.documentElement.style.colorScheme='" + scheme + "';"
                 + "}";
-        browser.getCefBrowser().executeJavaScript(script, "", 0);
+        DshJcefSupport.executeJavaScript(browser, script);
     }
 
     /** 将选中的主题应用到工具窗口自身界面（状态栏文字、日志区）。 */
@@ -305,7 +305,7 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
 
     private void reloadPage() {
         if (embeddedEnabled && browser != null) {
-            browser.getCefBrowser().reload();
+            DshJcefSupport.reload(browser);
         }
         loadUrlOnce();
     }
@@ -352,7 +352,7 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         healthTimer.stop();
         connection.disconnect();
         if (embeddedEnabled && browser != null) {
-            Disposer.dispose(browser);
+            DshJcefSupport.dispose(browser);
         }
     }
 

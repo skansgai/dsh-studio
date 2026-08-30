@@ -2,6 +2,24 @@
 
 本文件记录 DeepSeek Harness Studio 的版本变更。英文条目对应中文说明，保持双语一致。
 
+## 0.2.2（2026-08-30）
+
+### 修复 / Fixes
+- **修复 2023.1 市场的 Critical 兼容性**：把 `DshToolWindowPanel` 里对 `JBCefApp` / `JBCefBrowser`
+  等 JCEF 类的**直接引用**全部抽到新类 `DshJcefSupport`，改为 `Class.forName(...)` + 反射调用。
+  这样主插件 jar 内没有任何类的字节码包含 `com.intellij.ui.jcef` 引用，从而消除
+  IntelliJ IDEA 2023.1.7 (IU-231.9423.9) 上因 optional 模块解析不到而产生的
+  **3 个 compatibility problems**。
+- 保留 optional 依赖 `<depends optional="true" config-file="dsh-jcef.xml">com.intellij.modules.jcef</depends>`：
+  在 2026.x 平台该模块存在，JCEF 类可见；在 2023.1–2025.2 平台模块不存在，
+  `DshJcefSupport.isSupported()` 通过反射判断后回退为说明面板。
+
+### 说明 / Notes
+- 版本号升到 0.2.2 是因为 **0.2.1 已上传市场并被扫描出上述 Critical 问题**，
+  Marketplace 拒绝重复上传相同版本号。
+
+---
+
 ## 0.2.1（2026-08-30）
 
 兼容性修复版本，目标是让 JetBrains Marketplace 的自动验证全部通过。
@@ -10,12 +28,11 @@
 - **JCEF 依赖改为可选**：`<depends optional="true" config-file="dsh-jcef.xml">com.intellij.modules.jcef</depends>`。
   `com.intellij.modules.jcef` 这个模块只在 2026.x 平台存在，声明成强制依赖会让
   **2023.1–2025.2 全部报 `missing mandatory dependency` 而无法安装**。改为可选后：
-  新平台正常加载 JCEF，旧平台跳过该依赖、由 `JBCefApp.isSupported()` 运行时判断，
-  不可用时工具窗口回退为说明面板。
+  新平台正常加载 JCEF，旧平台跳过该依赖；不可用时工具窗口回退为说明面板。
 - **消除 1 处 scheduled-for-removal API**：`settings` 里选背景图的 `FileTypeDescriptor`
-  改为 `FileChooserDescriptorFactory.createSingleFileOrFolderDescriptor().withExtensionFilter(...)`。
+  改为 `FileChooserDescriptorFactory.createSingleFileDescriptor().withFileFilter(Condition)`。
 - **消除 3 处 deprecated API**：`StartServerAction` / `StopServerAction` / `OpenDshToolWindowAction`
-  的 `IconManager.getIcon(String, Class)` 改为单参数 `getIcon(String)`。
+  的 `IconManager.getIcon(String, Class)` 改为 `getIcon(String, ClassLoader)`。
 - **消除 1 处配置缺陷**：可选依赖补 `config-file="dsh-jcef.xml"`（新增
   `src/main/resources/META-INF/dsh-jcef.xml`），否则市场扫描报
   `OptionalDependencyConfigFileNotSpecified`。

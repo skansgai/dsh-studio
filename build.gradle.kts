@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.2.1"
+version = "0.2.2"
 
 repositories {
     mavenCentral()
@@ -94,6 +94,14 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
+            <h3>0.2.2</h3>
+            <ul>
+              <li><b>修复 2023.1 市场的 Critical 兼容性</b>：把 <code>JBCefApp</code> / <code>JBCefBrowser</code>
+                  等 JCEF 类的直接引用全部改为反射调用，主插件字节码不再包含 <code>com.intellij.ui.jcef</code>
+                  引用，从而消除 IU-231 等旧平台上的 3 个 compatibility problems</li>
+              <li>保留可选依赖 <code>com.intellij.modules.jcef</code>：2026.x 平台加载该模块后
+                  JCEF 类可见；旧平台模块不存在时，工具窗口自动回退为说明面板</li>
+            </ul>
             <h3>0.2.1</h3>
             <ul>
               <li><b>修复兼容性</b>：JCEF 模块依赖改为可选（<code>optional="true"</code>），解决 2023.1–2025.2 平台
