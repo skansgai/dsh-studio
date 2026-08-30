@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.2.2"
+version = "0.2.3"
 
 repositories {
     mavenCentral()
@@ -94,6 +94,15 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
+            <h3>0.2.3</h3>
+            <ul>
+              <li><b>修复 2023.1 的 IconManager 兼容性</b>：<code>IconManager.getIcon(String, ClassLoader)</code>
+                  在 IntelliJ IDEA 2023.1 (IU-231) 上不存在，导致 3 个 compatibility problems。
+                  改回 <code>IconManager.getIcon(String, Class&lt;?&gt;)</code>，该重载在 2023.1–2026.x
+                  全版本存在；在新版平台上属于 deprecated API，仅为警告，不影响上架。</li>
+              <li>延续 0.2.2：JCEF 类访问全部通过 <code>DshJcefSupport</code> 反射完成，
+                  主插件字节码无 <code>com.intellij.ui.jcef</code> 直接引用。</li>
+            </ul>
             <h3>0.2.2</h3>
             <ul>
               <li><b>修复 2023.1 市场的 Critical 兼容性</b>：把 <code>JBCefApp</code> / <code>JBCefBrowser</code>

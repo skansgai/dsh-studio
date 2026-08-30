@@ -2,6 +2,22 @@
 
 本文件记录 DeepSeek Harness Studio 的版本变更。英文条目对应中文说明，保持双语一致。
 
+## 0.2.3（2026-08-30）
+
+### 修复 / Fixes
+- **修复 2023.1 的 IconManager 兼容性**：`IconManager.getIcon(String, ClassLoader)` 在
+  IntelliJ IDEA 2023.1 (IU-231) 上不存在，导致 3 个 `Method not found` compatibility problems。
+  改回 `IconManager.getIcon(String, Class<?>)`——该重载在 2023.1–2026.x 全版本存在；
+  在新版平台上属于 deprecated API，仅为警告，不影响上架。
+- 延续 0.2.2：JCEF 类访问全部通过 `DshJcefSupport` 反射完成，主插件字节码无
+  `com.intellij.ui.jcef` 直接引用。
+
+### 说明 / Notes
+- 版本号升到 0.2.3 是因为 **0.2.2 已上传市场并被扫描出上述 Critical 问题**，
+  Marketplace 拒绝重复上传相同版本号。
+
+---
+
 ## 0.2.2（2026-08-30）
 
 ### 修复 / Fixes
@@ -15,7 +31,7 @@
   `DshJcefSupport.isSupported()` 通过反射判断后回退为说明面板。
 
 ### 说明 / Notes
-- 版本号升到 0.2.2 是因为 **0.2.1 已上传市场并被扫描出上述 Critical 问题**，
+- 版本号升到 0.2.2 是因为 **0.2.1 已上传市场并被扫描出 Critical 问题**，
   Marketplace 拒绝重复上传相同版本号。
 
 ---

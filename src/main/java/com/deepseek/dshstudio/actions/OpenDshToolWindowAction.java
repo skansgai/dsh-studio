@@ -18,9 +18,10 @@ public final class OpenDshToolWindowAction extends AnAction {
     public OpenDshToolWindowAction() {
         super("DeepSeek Harness",
                 "Open the DeepSeek Harness tool window",
-                // getIcon(String, Class) 已 deprecated；用 ClassLoader 重载（非弃用写法）
-                IconManager.getInstance().getIcon("/icons/dsh-toolwindow.svg",
-                        OpenDshToolWindowAction.class.getClassLoader()));
+                // getIcon(String, Class<?>) 在新版平台是 deprecated，但 ClassLoader 重载
+                // 在 2023.1 (231) 不存在，会导致 binary incompatible。为兼容 231–2026，
+                // 仍用 Class<?> 重载；deprecated 只是警告，不影响上架。
+                IconManager.getInstance().getIcon("/icons/dsh-toolwindow.svg", OpenDshToolWindowAction.class));
     }
 
     @Override

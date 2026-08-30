@@ -18,9 +18,10 @@ public final class StartServerAction extends AnAction {
     public StartServerAction(@NotNull Project project) {
         super("Start Server",
                 "Start the DeepSeek Harness web server",
-                // getIcon(String, Class) 已 deprecated；用 ClassLoader 重载（非弃用写法）
-                IconManager.getInstance().getIcon("/icons/dsh-start.svg",
-                        StartServerAction.class.getClassLoader()));
+                // getIcon(String, Class<?>) 在新版平台是 deprecated，但 ClassLoader 重载
+                // 在 2023.1 (231) 不存在，会导致 binary incompatible。为兼容 231–2026，
+                // 仍用 Class<?> 重载；deprecated 只是警告，不影响上架。
+                IconManager.getInstance().getIcon("/icons/dsh-start.svg", StartServerAction.class));
         this.project = project;
     }
 
