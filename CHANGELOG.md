@@ -2,6 +2,25 @@
 
 本文件记录 DeepSeek Harness Studio 的版本变更。英文条目对应中文说明，保持双语一致。
 
+## 0.3.0（2026-08-31）
+
+### 新增功能 / New features
+- **背景图 + 透明度设置移至 dsh 网页内置「通用设置」**：在 dsh 界面内注入一个齿轮按钮 → 弹出「通用设置」面板，
+  可在此选择背景图片、调节浮层透明度（0–60%）；背景以 `fixed` + `pointer-events:none` 的 CSS 半透明浮层
+  叠在 dsh 界面之上（鼠标点击不受影响），设置保存在 dsh 网页本地（localStorage），刷新后保留。
+- IntelliJ 设置页（Settings → Tools → DeepSeek Harness）不再包含背景图/透明度项，仅保留「通用设置 / 服务器 / 启动选项」分区与界面主题。
+
+### 内部实现 / Implementation
+- 新增资源脚本 `src/main/resources/dsh/overlay.js`：注入「通用设置」浮层 + 背景浮层；`DshToolWindowPanel` 通过类加载器读取并执行。
+- 新增 `DshSettingsTopics`（设置变化广播），替换原先的 `DshThemeTopics`。
+- `DshSettingsState` 保留 `backgroundImagePath` / `backgroundImageOpacity` 作为首次种子（旧 IntelliJ 设置值可带过）。
+
+### 说明 / Notes
+- 相比 0.3.0 初版，本版移除了“驱动 dsh 自身主题”与“插件市场（Plugins 标签页）”两项，设置更简洁。
+- dsh 网页上的浮层属于 CSS 注入，不影响 dsh 自身功能；SPA 内部整页跳转时浮层与面板会定时自动重新注入。
+
+---
+
 ## 0.2.3（2026-08-30）
 
 ### 修复 / Fixes

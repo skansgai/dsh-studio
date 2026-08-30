@@ -231,6 +231,39 @@ public final class DshServerManager {
     }
 
     /**
+     * 重启由本插件管理的 dsh web 服务器（先停后起）。
+     * <p>
+     * 用于安装 / 卸载 dsh 插件后让插件变更生效。{@link #stopServer()} 只停止本插件拉起的进程；
+     * 若当前是<b>外部</b>实例（非本插件启动）或服务器根本未运行，则无法在此重启——
+     * 外部实例会提示用户手动重启，未运行实例则无需重启（变更在下次启动时生效）。
+     * <b>必须在后台线程调用</b>（内部含短暂等待，调用方请用
+     * {@code ApplicationManager#getApplication()#executeOnPooledThread}）。
+     */
+    public void restartServer() {
+        boolean managed = isManagedProcessAlive();
+        if (!managed) {
+            if (state == ServerState.RUNNING) {
+                notifyBalloon("无法自动重启外部服务器",
+                        "当前 DeepSeek Harness 服务器并非由本插件启动，无法自动重启以加载插件变更。"
+                                + "请在启动它的终端中重启 dsh web。",
+                        NotificationType.INFORMATION);
+            }
+            return;
+        }
+        stopServer();
+        try {
+            Thread.sleep(800);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+        probe();
+        startServer();
+        notifyBalloon("DeepSeek Harness 正在重启",
+                "已应用插件变更，服务器重启中（就绪后内嵌页面会自动刷新）。",
+                NotificationType.INFORMATION);
+    }
+
+    /**
      * 立即执行一次健康探测并更新状态（阻塞，请勿在 EDT 直接调用；见 {@link #probeAsync()}）。
      */
     public void probe() {

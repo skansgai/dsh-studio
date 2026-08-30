@@ -10,6 +10,7 @@ import com.deepseek.dshstudio.server.DshServerListener;
 import com.deepseek.dshstudio.server.DshServerManager;
 import com.deepseek.dshstudio.server.DshServerManager.ServerState;
 import com.deepseek.dshstudio.server.DshServerTopics;
+import com.deepseek.dshstudio.settings.DshSettingsTopics;
 import com.deepseek.dshstudio.util.DshUtil;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.actionSystem.ActionManager;
@@ -18,6 +19,7 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.actionSystem.Separator;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Disposer;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBPanel;
@@ -40,6 +42,12 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Font;
 import java.awt.FlowLayout;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.Base64;
 
 /**
  * 工具窗口主面板：
@@ -54,6 +62,20 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     private static final JBColor COLOR_WARN = new JBColor(0xB26B00, 0xE8B26A);
     private static final JBColor COLOR_ERROR = new JBColor(0xC5221F, 0xF28B82);
     private static final JBColor COLOR_IDLE = new JBColor(new Color(0x808080), new Color(0xA0A0A0));
+
+    /** 注入到 dsh 网页的「通用设置 + 背景浮层」脚本（来自 classpath 资源 /dsh/overlay.js）。 */
+    private static final String OVERLAY_SCRIPT;
+    static {
+        String loaded = "";
+        try (InputStream in = DshToolWindowPanel.class.getResourceAsStream("/dsh/overlay.js")) {
+            if (in != null) {
+                loaded = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            }
+        } catch (IOException ignored) {
+            // 资源缺失：浮层不可用，不影响主功能
+        }
+        OVERLAY_SCRIPT = loaded;
+    }
 
     private final Project project;
     private final DshServerManager manager;
@@ -118,6 +140,15 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
                 }
             }
         });
+
+        // 设置变化（设置页广播）：重新应用自身界面 + 背景图 + 页面桥接 + 背景浮层
+        ApplicationManager.getApplication().getMessageBus().connect(this)
+                .subscribe(DshSettingsTopics.SETTINGS_TOPIC, () -> {
+                    applyThemeToChrome();
+                    applyBackgroundImages();
+                    injectPageTheme();
+                    injectBackgroundOverlay();
+                });
 
         this.healthTimer = new Timer(Math.max(500, settings.healthPollMs), e -> tick());
         this.healthTimer.start();
@@ -245,7 +276,21 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
             loadedUrl = url;
             DshJcefSupport.loadURL(browser, url);
             injectPageTheme();
+            injectBackgroundOverlay();
         }
+    }
+
+    /**
+     * 在工具窗口的内嵌浏览器中打开一个外部 URL。
+     * 内嵌不可用时退回系统浏览器。
+     */
+    public void loadUrlInBrowser(@NotNull String url) {
+        if (!embeddedEnabled || browser == null) {
+            DshUtil.openInBrowser(url);
+            return;
+        }
+        loadedUrl = url;
+        DshJcefSupport.loadURL(browser, url);
     }
 
     /**
@@ -281,6 +326,50 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         DshJcefSupport.executeJavaScript(browser, script);
     }
 
+    /**
+     * 把背景图作为半透明浮层注入到 dsh 网页之上，并在 dsh 界面内注入「通用设置」面板
+     * （背景图选择 + 浮层透明度），控制项位于 dsh 网页自身。
+     * JCEF 原生窗口上 Swing 盖不住，故用往页面 DOM 注入 fixed + pointer-events:none 的浮层实现；
+     * 浮层不拦截鼠标事件。设置保存在 dsh 页面 localStorage；首次用 IntelliJ 旧设置做种子。
+     */
+    private void injectBackgroundOverlay() {
+        if (browser == null || OVERLAY_SCRIPT.isEmpty()) {
+            return;
+        }
+        DshSettingsState s = DshSettingsState.getInstance();
+        // 用已有设置做“首次种子”，让旧版在 IntelliJ 设置里配过的图/透明度能带过来；
+        // 一旦网页端 localStorage 写过，就不再覆盖（用户在 dsh 页里改的优先）。
+        String seedBg = "";
+        String path = s.backgroundImagePath;
+        if (path != null && !path.trim().isEmpty()) {
+            File f = new File(path.trim());
+            if (f.isFile() && f.length() < 3L * 1024 * 1024) {
+                try {
+                    byte[] bytes = Files.readAllBytes(f.toPath());
+                    seedBg = "data:" + mimeOf(path) + ";base64," + Base64.getEncoder().encodeToString(bytes);
+                } catch (IOException ignored) {
+                    // 读不到就用空种子
+                }
+            }
+        }
+        int seedOpacity = (int) Math.round(Math.max(0.0, Math.min(1.0, s.backgroundImageOpacity)) * 100);
+        String seedLine = "window.__dshSeed={bg:" + (seedBg.isEmpty() ? "null" : ("\"" + seedBg + "\""))
+                + ",opacity:" + seedOpacity + "};";
+        String script = OVERLAY_SCRIPT.replace("/*SEED*/", seedLine);
+        DshJcefSupport.executeJavaScript(browser, script);
+    }
+
+    private static String mimeOf(@NotNull String path) {
+        String p = path.toLowerCase();
+        if (p.endsWith(".png")) return "image/png";
+        if (p.endsWith(".jpg") || p.endsWith(".jpeg")) return "image/jpeg";
+        if (p.endsWith(".gif")) return "image/gif";
+        if (p.endsWith(".webp")) return "image/webp";
+        if (p.endsWith(".svg")) return "image/svg+xml";
+        if (p.endsWith(".bmp")) return "image/bmp";
+        return "image/png";
+    }
+
     /** 将选中的主题应用到工具窗口自身界面（状态栏文字、日志区）。 */
     private void applyThemeToChrome() {
         Boolean dark = DshUiTheme.fromId(DshSettingsState.getInstance().uiTheme).isDarkOverride();
@@ -300,12 +389,20 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
             logArea.setBackground(bg);
             logArea.setForeground(fg);
             logArea.setCaretColor(fg);
+            statusBarPanel.setBackground(bg);
+            statusBarPanel.setForeground(fg);
+        } else {
+            // 跟随 IDE：交还给系统外观，不强制覆盖
+            statusBarPanel.setBackground(null);
+            statusBarPanel.setForeground(null);
         }
     }
 
     private void reloadPage() {
         if (embeddedEnabled && browser != null) {
             DshJcefSupport.reload(browser);
+            injectPageTheme();
+            injectBackgroundOverlay();
         }
         loadUrlOnce();
     }

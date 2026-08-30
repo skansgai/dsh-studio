@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.2.3"
+version = "0.3.0"
 
 repositories {
     mavenCentral()
@@ -94,6 +94,15 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
+            <h3>0.3.0</h3>
+            <ul>
+              <li><b>背景图 + 透明度设置移至 dsh 网页内置「通用设置」</b>：在 dsh 界面内注入一个齿轮按钮 → 弹出
+                  「通用设置」面板，可在此选择背景图片、调节浮层透明度（0–60%）；背景以 fixed + pointer-events:none 的
+                  CSS 半透明浮层叠在 dsh 界面之上（不挡点击），设置保存在 dsh 网页本地，刷新后保留。</li>
+              <li>IntelliJ 设置页（Settings → Tools → DeepSeek Harness）不再包含背景图/透明度项，仅保留「通用设置 / 服务器 / 启动选项」分区与界面主题。</li>
+              <li>顶部状态条与“等待连接”空白页保留原有背景图。</li>
+              <li>精简设置项：移除了上一版的“驱动 dsh 自身主题”与“插件市场”两项。</li>
+            </ul>
             <h3>0.2.3</h3>
             <ul>
               <li><b>修复 2023.1 的 IconManager 兼容性</b>：<code>IconManager.getIcon(String, ClassLoader)</code>

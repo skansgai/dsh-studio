@@ -20,6 +20,8 @@ DeepSeek Harness 是 DeepSeek 的开源编码智能体框架；`dsh web` 会在�
 - **会话快速访问**：`Tools → DeepSeek Harness → Recent Harness Sessions…` 弹出搜索式会话列表，选中一项即把 sessionId 复制到剪贴板并打开工具窗口。
 - **Headless 任务**：`Tools → DeepSeek Harness → Run Headless Task…` 在 IDE 内直接跑一次性 `dsh --profile headless` 任务，输出进入 Server Log。
 - **可配置**：地址、端口、启动命令、工作目录（workspace 根目录）、`DSH_HOME`、是否自动启动、是否使用内嵌浏览器。
+- **换肤**：设置里可选「跟随 IDE / 浅色 / 深色」，工具窗口顶部状态条会随主题着色。
+- **背景图浮层（在 dsh 网页内设置）**：dsh 界面内会注入一个齿轮按钮，点开即「通用设置」面板，可在此选择背景图片、调节浮层透明度（0–60%）；图片以半透明覆盖层叠在 dsh 界面之上（CSS 注入、不挡点击），设置保存在 dsh 网页本地，刷新后保留。
 
 ## 兼容性
 
@@ -58,6 +60,14 @@ DeepSeek Harness 是 DeepSeek 的开源编码智能体框架；`dsh web` 会在�
 ### 0.2.0 新功能使用方式
 
 - **发送代码到 Harness**：在编辑器里选中一段代码（不选中则发送整个文件），右键 → `DeepSeek Harness → Send Code to Harness…`。弹窗里可编辑附带给 agent 的指令，点 OK 后插件会确保服务器在运行、把代码作为 prompt 提交到 Harness 会话，并自动打开工具窗口。首次使用会触发 `npx --yes @deepseek-ai/dsh` 下载（约 284MB / 14 分钟），期间状态栏显示“启动中”属正常。
+
+### 0.3.0 新功能使用方式
+
+- **背景图浮层（在 dsh 网页内）**：打开 DeepSeek Harness 工具窗口、连上服务器后，dsh 界面右下角会出现一个齿轮按钮，
+  点开即「通用设置」面板。在「背景图片」选择一张本地图片（留空/点「移除背景」则不显示），用「浮层透明度」滑块调节
+  半透明程度（0–60%，默认 15%）。图片会作为半透明覆盖层叠在 DeepSeek Harness 网页界面之上（鼠标点击不受影响），
+  设置保存在 dsh 网页本地，刷新或重启后保留。
+- **换肤**：`Settings → Tools → DeepSeek Harness → 界面主题` 选「跟随 IDE / 浅色 / 深色」，工具窗口顶部状态条随主题着色。
 - **状态栏小部件**：窗口底部状态栏右侧有一个 DSH 状态控件，初态“未连接”。点击它可打开 Harness 工具窗口；服务器就绪后变为“运行中”（绿色）。
 - **会话快速访问**：`Tools → DeepSeek Harness → Recent Harness Sessions…` 弹出当前会话列表，选中一项会把该会话的 sessionId 复制到剪贴板并打开工具窗口（注：dsh Web 前端暂不支持会话深链，因此以“复制 ID + 打开工具窗口”方式跳转）。
 - **Headless 任务**：`Tools → DeepSeek Harness → Run Headless Task…` 输入任务描述，插件以 `dsh --profile headless "任务"` 方式在后台运行，输出实时写入 Server Log。
