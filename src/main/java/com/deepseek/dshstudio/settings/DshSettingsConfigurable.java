@@ -19,9 +19,11 @@ import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JPanel;
+import javax.swing.JSlider;
 import javax.swing.JSpinner;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingConstants;
+import javax.swing.event.ChangeListener;
 import java.awt.BorderLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
@@ -48,6 +50,8 @@ public final class DshSettingsConfigurable implements Configurable {
     private final JCheckBox autoStartCheckBox = new JCheckBox("打开工具窗口时自动启动服务器（若尚未运行）");
     private final JCheckBox embeddedCheckBox = new JCheckBox("使用内嵌浏览器（JCEF）显示界面");
     private final JComboBox<DshUiTheme> themeCombo = new JComboBox<>(DshUiTheme.values());
+    private final JSlider opacitySlider = new JSlider(0, 60, 15);
+    private final JBLabel opacityValueLabel = new JBLabel("15%");
     private final JBTextField backgroundImageField = new JBTextField();
     private final JBLabel testResultLabel = new JBLabel();
 
@@ -153,6 +157,24 @@ public final class DshSettingsConfigurable implements Configurable {
         form.add(embeddedCheckBox, c);
         c.gridwidth = 1;
 
+        // 背景图浮层透明度
+        c.gridy = row++;
+        c.gridx = 0;
+        c.gridwidth = 1;
+        c.weightx = 0;
+        form.add(new JBLabel("浮层透明度:"), c);
+        c.gridx = 1;
+        c.gridwidth = 1;
+        c.weightx = 1;
+        opacitySlider.setMajorTickSpacing(20);
+        opacitySlider.setPaintTicks(true);
+        opacitySlider.addChangeListener((ChangeListener) e ->
+                opacityValueLabel.setText(opacitySlider.getValue() + "%"));
+        JPanel opacityRow = new JPanel(new BorderLayout(6, 0));
+        opacityRow.add(opacitySlider, BorderLayout.CENTER);
+        opacityRow.add(opacityValueLabel, BorderLayout.EAST);
+        form.add(opacityRow, c);
+
         // 提示与测试按钮
         JBLabel hints = new JBLabel(
                 "<html><div style='width:520px'>" +
@@ -231,6 +253,7 @@ public final class DshSettingsConfigurable implements Configurable {
                 || !serverTokenField.getText().trim().equals(state.serverAuthToken)
                 || autoStartCheckBox.isSelected() != state.autoStartServer
                 || embeddedCheckBox.isSelected() != state.useEmbeddedBrowser
+                || Math.round(state.backgroundImageOpacity * 100) != opacitySlider.getValue()
                 || !((DshUiTheme) themeCombo.getSelectedItem()).id.equals(state.uiTheme)
                 || !backgroundImageField.getText().equals(state.backgroundImagePath);
     }
@@ -248,6 +271,10 @@ public final class DshSettingsConfigurable implements Configurable {
         state.useEmbeddedBrowser = embeddedCheckBox.isSelected();
         state.uiTheme = ((DshUiTheme) themeCombo.getSelectedItem()).id;
         state.backgroundImagePath = backgroundImageField.getText().trim();
+        state.backgroundImageOpacity = opacitySlider.getValue() / 100.0;
+        // 广播设置变化，让已打开的工具窗口重新应用（主题 / 背景图 / 浮层）
+        ApplicationManager.getApplication().getMessageBus()
+                .syncPublisher(DshSettingsTopics.SETTINGS_TOPIC).onChanged();
     }
 
     @Override
@@ -263,6 +290,8 @@ public final class DshSettingsConfigurable implements Configurable {
         embeddedCheckBox.setSelected(state.useEmbeddedBrowser);
         themeCombo.setSelectedItem(DshUiTheme.fromId(state.uiTheme));
         backgroundImageField.setText(state.backgroundImagePath);
+        opacitySlider.setValue((int) Math.round(state.backgroundImageOpacity * 100));
+        opacityValueLabel.setText(opacitySlider.getValue() + "%");
         testResultLabel.setText("");
         testResultLabel.setHorizontalAlignment(SwingConstants.LEFT);
     }

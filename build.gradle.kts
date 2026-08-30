@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.2.3"
+version = "0.3.0"
 
 repositories {
     mavenCentral()
@@ -94,6 +94,13 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
+            <h3>0.3.0</h3>
+            <ul>
+              <li><b>背景图半透明浮层</b>：设置中可指定一张本地图片，作为半透明覆盖层叠在 DeepSeek Harness 网页界面之上
+                  （往页面注入 fixed + pointer-events:none 的 CSS 浮层实现，鼠标点击不受影响）；浮层透明度可调（0–60%）。</li>
+              <li>顶部状态条与“等待连接”空白页保留原有背景图。</li>
+              <li>精简设置项：移除了上一版的“驱动 dsh 自身主题”与“插件市场”两项。</li>
+            </ul>
             <h3>0.2.3</h3>
             <ul>
               <li><b>修复 2023.1 的 IconManager 兼容性</b>：<code>IconManager.getIcon(String, ClassLoader)</code>

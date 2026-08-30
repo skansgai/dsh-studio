@@ -44,6 +44,9 @@ public final class DshSettingsState implements PersistentStateComponent<DshSetti
     /** 工具窗口背景图片（绝对路径，本地图片文件）；留空则不显示背景图。 */
     public String backgroundImagePath = "";
 
+    /** 背景图浮层透明度（0.0–1.0），作用于内嵌 dsh 网页之上的半透明覆盖层。默认 0.15。 */
+    public double backgroundImageOpacity = 0.15;
+
     /**
      * 外部服务器鉴权 token（可选）：连接非本插件启动的 dsh 实例时，
      * 从其启动输出中的 ?token=... 复制到这里以启用 IDE 内的会话操作。
@@ -72,6 +75,7 @@ public final class DshSettingsState implements PersistentStateComponent<DshSetti
         this.healthPollMs = state.healthPollMs;
         this.uiTheme = state.uiTheme == null ? "follow" : state.uiTheme;
         this.backgroundImagePath = state.backgroundImagePath == null ? "" : state.backgroundImagePath;
+        this.backgroundImageOpacity = state.backgroundImageOpacity;
         this.serverAuthToken = state.serverAuthToken == null ? "" : state.serverAuthToken;
     }
 

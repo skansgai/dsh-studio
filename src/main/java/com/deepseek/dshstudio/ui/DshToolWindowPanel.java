@@ -10,6 +10,7 @@ import com.deepseek.dshstudio.server.DshServerListener;
 import com.deepseek.dshstudio.server.DshServerManager;
 import com.deepseek.dshstudio.server.DshServerManager.ServerState;
 import com.deepseek.dshstudio.server.DshServerTopics;
+import com.deepseek.dshstudio.settings.DshSettingsTopics;
 import com.deepseek.dshstudio.util.DshUtil;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.actionSystem.ActionManager;
@@ -18,6 +19,7 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.actionSystem.Separator;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Disposer;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBPanel;
@@ -40,6 +42,10 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Font;
 import java.awt.FlowLayout;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.util.Base64;
 
 /**
  * 工具窗口主面板：
@@ -118,6 +124,15 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
                 }
             }
         });
+
+        // 设置变化（设置页广播）：重新应用自身界面 + 背景图 + 页面桥接 + 背景浮层
+        ApplicationManager.getApplication().getMessageBus().connect(this)
+                .subscribe(DshSettingsTopics.SETTINGS_TOPIC, () -> {
+                    applyThemeToChrome();
+                    applyBackgroundImages();
+                    injectPageTheme();
+                    injectBackgroundOverlay();
+                });
 
         this.healthTimer = new Timer(Math.max(500, settings.healthPollMs), e -> tick());
         this.healthTimer.start();
@@ -245,7 +260,21 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
             loadedUrl = url;
             DshJcefSupport.loadURL(browser, url);
             injectPageTheme();
+            injectBackgroundOverlay();
         }
+    }
+
+    /**
+     * 在工具窗口的内嵌浏览器中打开一个外部 URL。
+     * 内嵌不可用时退回系统浏览器。
+     */
+    public void loadUrlInBrowser(@NotNull String url) {
+        if (!embeddedEnabled || browser == null) {
+            DshUtil.openInBrowser(url);
+            return;
+        }
+        loadedUrl = url;
+        DshJcefSupport.loadURL(browser, url);
     }
 
     /**
@@ -281,6 +310,70 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         DshJcefSupport.executeJavaScript(browser, script);
     }
 
+    /**
+     * 把设置里的背景图作为半透明浮层注入到 dsh 网页之上。
+     * JCEF 原生窗口上 Swing 盖不住，所以用往页面 DOM 注入一个 fixed + pointer-events:none 的 div 实现；
+     * 浮层不拦截鼠标事件，透明度由 setting.backgroundImageOpacity 控制。
+     */
+    private void injectBackgroundOverlay() {
+        if (browser == null) {
+            return;
+        }
+        DshSettingsState s = DshSettingsState.getInstance();
+        String path = s.backgroundImagePath;
+        if (path == null || path.trim().isEmpty()) {
+            // 没有图：清掉可能残留的浮层
+            DshJcefSupport.executeJavaScript(browser,
+                    "var e=document.getElementById('dsh-bg-overlay');if(e&&e.parentNode)e.parentNode.removeChild(e);");
+            return;
+        }
+        File f = new File(path.trim());
+        if (!f.isFile()) {
+            return;
+        }
+        byte[] bytes;
+        try {
+            bytes = Files.readAllBytes(f.toPath());
+        } catch (IOException e) {
+            return;
+        }
+        String dataUri = "data:" + mimeOf(path) + ";base64," + Base64.getEncoder().encodeToString(bytes);
+        double opacity = Math.max(0.0, Math.min(1.0, s.backgroundImageOpacity));
+        // 浮层 JS：readyState 就绪即注入，并延迟一次兜底（应对 SPA 晚挂载）；pointer-events:none 不挡点击
+        String script =
+                "(function(){"
+                + "var id='dsh-bg-overlay';"
+                + "var ex=document.getElementById(id);if(ex&&ex.parentNode){ex.parentNode.removeChild(ex);}"
+                + "function apply(){"
+                + " var d=document.getElementById(id);if(d){return;}"
+                + " var div=document.createElement('div');div.id=id;"
+                + " div.style.position='fixed';div.style.left='0';div.style.top='0';"
+                + " div.style.width='100%';div.style.height='100%';"
+                + " div.style.zIndex='2147483647';div.style.pointerEvents='none';"
+                + " div.style.backgroundImage=\"url('" + dataUri + "')\";"
+                + " div.style.backgroundSize='cover';div.style.backgroundPosition='center';"
+                + " div.style.backgroundRepeat='no-repeat';"
+                + " div.style.opacity='" + opacity + "';"
+                + " (document.body||document.documentElement).appendChild(div);"
+                + "}"
+                + " if(document.readyState==='complete'||document.readyState==='interactive'){apply();}"
+                + " else{window.addEventListener('DOMContentLoaded',apply);}"
+                + " setTimeout(apply,1500);"
+                + "})();";
+        DshJcefSupport.executeJavaScript(browser, script);
+    }
+
+    private static String mimeOf(@NotNull String path) {
+        String p = path.toLowerCase();
+        if (p.endsWith(".png")) return "image/png";
+        if (p.endsWith(".jpg") || p.endsWith(".jpeg")) return "image/jpeg";
+        if (p.endsWith(".gif")) return "image/gif";
+        if (p.endsWith(".webp")) return "image/webp";
+        if (p.endsWith(".svg")) return "image/svg+xml";
+        if (p.endsWith(".bmp")) return "image/bmp";
+        return "image/png";
+    }
+
     /** 将选中的主题应用到工具窗口自身界面（状态栏文字、日志区）。 */
     private void applyThemeToChrome() {
         Boolean dark = DshUiTheme.fromId(DshSettingsState.getInstance().uiTheme).isDarkOverride();
@@ -300,12 +393,20 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
             logArea.setBackground(bg);
             logArea.setForeground(fg);
             logArea.setCaretColor(fg);
+            statusBarPanel.setBackground(bg);
+            statusBarPanel.setForeground(fg);
+        } else {
+            // 跟随 IDE：交还给系统外观，不强制覆盖
+            statusBarPanel.setBackground(null);
+            statusBarPanel.setForeground(null);
         }
     }
 
     private void reloadPage() {
         if (embeddedEnabled && browser != null) {
             DshJcefSupport.reload(browser);
+            injectPageTheme();
+            injectBackgroundOverlay();
         }
         loadUrlOnce();
     }

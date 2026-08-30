@@ -2,6 +2,24 @@
 
 本文件记录 DeepSeek Harness Studio 的版本变更。英文条目对应中文说明，保持双语一致。
 
+## 0.3.0（2026-08-31）
+
+### 新增功能 / New features
+- **背景图半透明浮层**：设置中可指定一张本地图片，作为半透明覆盖层叠在 DeepSeek Harness 网页界面之上
+  （通过往页面注入 `fixed` + `pointer-events:none` 的 CSS 浮层实现，鼠标点击不受影响）；
+  浮层透明度可调（0–60%）。顶部状态条与“等待连接”空白页保留原有背景图。
+
+### 内部实现 / Implementation
+- 新增 `DshToolWindowPanel.injectBackgroundOverlay()`：把图片 base64 编码后以 data URI 注入页面 DOM。
+- 新增 `DshSettingsTopics`（设置变化广播），替换原先的 `DshThemeTopics`。
+- `DshSettingsState` 新增 `backgroundImageOpacity`；移除 `driveDshTheme` / `autoRestartAfterPluginChange`。
+
+### 说明 / Notes
+- 相比 0.3.0 初版，本版移除了“驱动 dsh 自身主题”与“插件市场（Plugins 标签页）”两项，设置更简洁。
+- dsh 网页上的浮层属于 CSS 注入，不影响 dsh 自身功能；SPA 内部整页跳转时浮层会在加载后自动重新注入。
+
+---
+
 ## 0.2.3（2026-08-30）
 
 ### 修复 / Fixes

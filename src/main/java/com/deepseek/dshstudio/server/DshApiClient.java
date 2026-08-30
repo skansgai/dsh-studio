@@ -165,14 +165,24 @@ public final class DshApiClient {
     }
 
     /**
-     * 执行一次 unary RPC。
+     * 执行一次 unary RPC（session 命名空间，方法短名）。
      *
      * @param method  不带命名空间前缀的方法短名（如 {@code list}）
      * @param payload 业务参数（直接作为报文的 payload 字段）
      * @return 本次的 rpcId 与解析后的业务 value
      */
     private CallResult callRaw(@NotNull String method, @NotNull JsonObject payload) throws DshApiException {
-        String fullMethod = DshStudioConstants.API_NAMESPACE_SESSION + "." + method;
+        return callRawFull(DshStudioConstants.API_NAMESPACE_SESSION + "." + method, payload);
+    }
+
+    /**
+     * 执行一次 unary RPC（任意命名空间，点号全名方法）。
+     *
+     * @param fullMethod 点号全名（如 {@code settings.update}）
+     * @param payload    业务参数（直接作为报文的 payload 字段）
+     * @return 本次的 rpcId 与解析后的业务 value
+     */
+    private CallResult callRawFull(@NotNull String fullMethod, @NotNull JsonObject payload) throws DshApiException {
         String rpcId = "dsh-studio-" + UUID.randomUUID();
         String url = baseUrl() + "/api/" + fullMethod;
         try {

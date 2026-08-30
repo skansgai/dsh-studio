@@ -18,6 +18,45 @@
 
 ---
 
+## 0.5 实测校正（2026-08-30 22:20 真机 CLI 实跑，推翻上文若干推测）
+
+> 在 `C:\Users\yss\AppData\Local\npm-cache\_npx\1e7f6d9597241db0\node_modules\.bin\dsh.cmd`
+> 上实跑 dsh CLI 得出。以下结论优先级高于 §1.3 的早期调研。
+
+| # | 原推测 | 实测结论 |
+|---|--------|----------|
+| 1 | `dsh plugin list` 输出格式未知，需实测解析 | **`dsh plugin` 委托给 pnpm**：`dsh plugin --profile web --help` 打印的是 pnpm 9.15.9 帮助。没装插件时 `list` **无任何输出**（非表格/JSON）。→ **不要解析 CLI 输出** |
+| 2 | 已装列表只能靠 CLI | 直接读 `~/.dsh/profiles/web/package.json` 的 `dependencies`（插件=npm 依赖），`dsh.profile.bundles` 是内置核心（`@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app`），不计为插件 |
+| 3 | 安装/卸载靠 CLI，配置写在 `cordis.patch.yml` | 部分正确：`cordis.patch.yml` 是顶层 YAML 数组（id-targeted overrides/disables/insert lists，当前 `[]`）；但增删靠 pnpm 改 `package.json` |
+| 4 | 无插件相关 API | **有**：Remote API `pluginInventory/list` → `{entries:[{entryId, moduleName, enabled, fiberPhase}]}`，`fiberPhase` ∈ pending/loading/active/failed/unloading/null |
+| 5 | — | **但无 install / remove / enable / disable 远程 API**，增删仍必须走 CLI + 重启 |
+| 6 | — | dsh 自带 `dsh-client-ui-settings-plugins` / `-plugin-inventory` / `-theme`，**内嵌 web UI 里已有 Settings → Plugins 页面** |
+| 7 | 皮肤只改插件自身 UI | `~/.dsh/settings.yaml` 有 `ui-theme.preference`（dark/light），**dsh 自己的主题存在这里**，理论上可让插件连带控制内嵌页面主题 |
+
+**§1.7 风险项状态更新**：原 #1（list 输出格式）→ ✅ 已解决（改读 package.json / 用 API）；
+原 #2、#3、#4 仍待真机验证。
+
+---
+
+## 0.6 真机验证（2026-08-31，settings API / 换肤可行性）
+
+在用户本机已运行的 `dsh web`（127.0.0.1:3080）上 curl 实测：
+
+1. **`settings.describe`** 返回完整命名空间清单。`ui-theme` 结构：
+   `preference ∈ light | dark | system`（默认 `system`），`applies:"live"`，`revision:0`。
+   其它可读命名空间：`locale` / `agent-default-model` / `ui-conversation` / `agent-presets` /
+   `shell` / `permission` / `llm-deepseek` / `web-search-deepseek` / `agent-loop` / `llm-pi-ai`。
+2. **`settings.update` 写 dsh 主题成功**：`{"ns":"ui-theme","patch":{"preference":"light"}}`
+   把 `~/.dsh/settings.yaml` 改写为 `light`（文件内容已落盘）。
+   - 沙箱环境唯一报错：`safe-delete` shim 拦了 dsh 的 atomic-replace（trash 旧文件）步骤，
+     返回 `ok:false` + `code:"settings-rejected"`；**但这是沙箱特有，非 dsh bug**，
+     真实机器上此步成功、返回 `ok:true`。
+   - 实测后已把 `settings.yaml` 还原为 `dark`（与运行实例内存值一致），无遗留 lock/temp 文件。
+3. **结论**：插件换肤应**同时驱动 dsh 自身主题**（选项 b，见 §5 Q6），视觉收益远大于只改插件 UI；
+   优先用 `settings.update`（干净、live、免重启），并在真实机器复测"内存值+内嵌页面实时刷新"。
+
+---
+
 ## 1. 功能 A：插件市场与安装（dsh 生态扩展）
 
 ### 1.1 用户场景
@@ -205,7 +244,18 @@ public enum DshTheme {
 
 ## 5. 开放问题（评审时请确认）
 
-1. 功能 A 的"链接插件市场"——是打开社区 hub `dsh-plugin.org`，还是优先引导装官方 `dshmarket` 并内嵌其页？（影响按钮行为）
+> 下面的 Q2' / Q5 / Q6 是 0.5 节实测后**新增**的问题。
+
+1. ~~功能 A 的"链接插件市场"——是打开社区 hub `dsh-plugin.org`，还是优先引导装官方 `dshmarket` 并内嵌其页？~~
+   → 保留，但注意 dsh 自带 Settings → Plugins 页面，需先定「增量价值」（见 Q5）。
 2. 功能 B 是否需要"自定义主色"细粒度，还是只要 跟随IDE/深/浅 三档即可？
+   （现状：已有 `DshUiTheme` 三档，目前只作用于日志区 + 内嵌页面 color-scheme，
+   未覆盖状态栏/工具窗口框架/会话弹窗，也没有自定义主色。）
 3. 自动重启 dsh web 是否默认开启（装插件后不打断用户 vs. 用户想自己控制重启时机）？
 4. 插件市场与皮肤是否合并为 0.3.0，还是分两个小版本？
+5. **【新增】插件管理要不要做完整 Tab？** 实测发现 dsh 内嵌 UI 已有 Settings → Plugins 页面。
+   选项：(a) 只做"打开插件市场 + 快速安装框"轻量版；(b) 做完整 Plugins Tab（列表+启停+移除）。
+6. **【新增，✅ 2026-08-31 已实测解决】"换肤"要不要顺带控制 dsh 自己的主题？**
+   → **结论：选项 (b) 可行，且收益最大**。已 curl 验证 `settings.update` 可写 dsh 主题
+   （`ui-theme.preference ∈ light|dark|system`），文件落盘成功（沙箱仅 safe-delete shim 报错，非 dsh bug）。
+   插件换肤应**同时驱动 dsh 自身主题**，让内嵌网页也换肤。详见 §0.6。

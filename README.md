@@ -20,6 +20,8 @@ DeepSeek Harness is DeepSeek's open-source coding-agent framework; `dsh web` ser
 - **Recent sessions**: `Tools → DeepSeek Harness → Recent Harness Sessions…` opens a search-style session list; picking one copies its sessionId and opens the tool window.
 - **Headless tasks**: `Tools → DeepSeek Harness → Run Headless Task…` runs a one-shot `dsh --profile headless` task inside the IDE, output goes to the Server Log.
 - **Configurable**: URL, port, start command, working directory (workspace root), `DSH_HOME`, auto-start, embedded browser toggle.
+- **Theme**: pick Follow IDE / Light / Dark in settings; the tool-window top bar is tinted to match.
+- **Image overlay**: set a local image in settings to overlay the DeepSeek Harness web UI as a semi-transparent layer (CSS-injected, click-through); overlay opacity is adjustable (0–60%).
 
 ## Compatibility
 

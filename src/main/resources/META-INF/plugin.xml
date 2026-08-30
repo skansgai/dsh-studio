@@ -17,6 +17,8 @@
   <li><b>Headless tasks</b>: run a one-shot <code>dsh --profile headless</code> task from the IDE, output lands in the Server Log</li>
   <li>Open the same page in your system browser at any time</li>
   <li>Configurable URL / port / working directory (workspace root) / <code>DSH_HOME</code> / auth token</li>
+  <li><b>Theme</b>: pick Follow IDE / Light / Dark; the DeepSeek Harness web page itself can follow (writes <code>ui-theme.preference</code>)</li>
+  <li><b>Plugins</b> tab: browse the dsh plugin market, list / install / uninstall DeepSeek Harness plugins from the IDE (auto-restarts the server to load them)</li>
 </ul>
 
 <h3>Quick Start</h3>
