@@ -1,0 +1,12 @@
+<idea-plugin>
+    <!--
+      仅在 com.intellij.modules.jcef 模块可用时加载（IntelliJ IDEA / Android Studio 2026.x+）。
+
+      当前没有 JCEF 专属的扩展点需要在这里注册：
+      工具窗口本身在 plugin.xml 中始终注册，DshToolWindowPanel 内部用
+      JBCefApp.isSupported() 做运行时判断，不可用时回退到说明面板。
+
+      保留此文件是为了满足规范：optional="true" 的依赖必须同时声明 config-file，
+      否则市场扫描会报 OptionalDependencyConfigFileNotSpecified。
+    -->
+</idea-plugin>

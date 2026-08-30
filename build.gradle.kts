@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.2.0"
+version = "0.2.1"
 
 repositories {
     mavenCentral()
@@ -94,6 +94,15 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
+            <h3>0.2.1</h3>
+            <ul>
+              <li><b>修复兼容性</b>：JCEF 模块依赖改为可选（<code>optional="true"</code>），解决 2023.1–2025.2 平台
+                  因缺失 <code>com.intellij.modules.jcef</code> 而报 “missing mandatory dependency” 导致无法安装的问题</li>
+              <li><b>消除市场验证警告</b>：替换 1 处 scheduled-for-removal API（<code>FileTypeDescriptor</code>）
+                  与 3 处 deprecated API（<code>IconManager.getIcon(String, Class)</code>）</li>
+              <li>为可选依赖补充 <code>config-file</code> 声明，消除 “plugin configuration defect”</li>
+              <li>说明：JCEF 不可用时工具窗口自动回退为说明面板（<code>JBCefApp.isSupported()</code> 运行时判断）</li>
+            </ul>
             <h3>0.2.0</h3>
             <ul>
               <li><b>发送代码到 Harness</b>：编辑器右键即可把选中代码（或整个文件）连同文件定位提交到会话，agent 在工具窗口中执行</li>
@@ -162,10 +171,21 @@ intellijPlatform {
     buildSearchableOptions = false
 
     pluginVerification {
-        // 2.18.x 的方法名是 create(平台类型, 版本)，旧版叫 ide() 已更名
+        // 只用本机已安装的 IDE 做验证（零下载，避免 1GB+ 的远程 IDE 下载卡住构建）：
+        //   Android Studio 2023.1 (AI-232) —— 市场扫描报 missing mandatory dependency 的最老版本
+        //   IntelliJ IDEA 2026.2.1         —— 用户真机版本
+        // 需要覆盖其它版本时，取消下面的注释（会触发 1GB+ 的远程 IDE 下载，本机网络很慢）：
+        //   create(org.jetbrains.intellij.platform.gradle.IntelliJPlatformType.IntellijIdeaCommunity, "2024.3.7.1")
+        //   create(org.jetbrains.intellij.platform.gradle.IntelliJPlatformType.IntellijIdeaCommunity, "2025.1.7.2")
         ides {
-            create(org.jetbrains.intellij.platform.gradle.IntelliJPlatformType.IntellijIdeaCommunity, "2024.3.7.1")
-            create(org.jetbrains.intellij.platform.gradle.IntelliJPlatformType.IntellijIdeaCommunity, "2025.1.7.2")
+            // 注：插件的 since-build 仍是 231（支持 2023.1+），但 pluginVerifier 1.410 自身
+            // 最低只支持 233，因此本机 Android Studio 2023.1 (AI-232) 不能作为验证目标。
+            // 默认用本机 IDE（ideLocalPath，通常是 ideaIC 2024.2.3）验证，零下载；
+            // 更老/更新版本的兼容性由 JetBrains 市场扫描覆盖。
+            val localIde: String? = ideLocalPath
+            if (localIde != null) {
+                local(localIde)
+            }
         }
     }
 

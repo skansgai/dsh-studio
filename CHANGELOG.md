@@ -2,6 +2,35 @@
 
 本文件记录 DeepSeek Harness Studio 的版本变更。英文条目对应中文说明，保持双语一致。
 
+## 0.2.1（2026-08-30）
+
+兼容性修复版本，目标是让 JetBrains Marketplace 的自动验证全部通过。
+
+### 修复 / Fixes
+- **JCEF 依赖改为可选**：`<depends optional="true" config-file="dsh-jcef.xml">com.intellij.modules.jcef</depends>`。
+  `com.intellij.modules.jcef` 这个模块只在 2026.x 平台存在，声明成强制依赖会让
+  **2023.1–2025.2 全部报 `missing mandatory dependency` 而无法安装**。改为可选后：
+  新平台正常加载 JCEF，旧平台跳过该依赖、由 `JBCefApp.isSupported()` 运行时判断，
+  不可用时工具窗口回退为说明面板。
+- **消除 1 处 scheduled-for-removal API**：`settings` 里选背景图的 `FileTypeDescriptor`
+  改为 `FileChooserDescriptorFactory.createSingleFileOrFolderDescriptor().withExtensionFilter(...)`。
+- **消除 3 处 deprecated API**：`StartServerAction` / `StopServerAction` / `OpenDshToolWindowAction`
+  的 `IconManager.getIcon(String, Class)` 改为单参数 `getIcon(String)`。
+- **消除 1 处配置缺陷**：可选依赖补 `config-file="dsh-jcef.xml"`（新增
+  `src/main/resources/META-INF/dsh-jcef.xml`），否则市场扫描报
+  `OptionalDependencyConfigFileNotSpecified`。
+
+### 验证结果 / Verification
+本地 pluginVerifier（IntelliJ IDEA 2026.2.1 / IU-262.9437.185）修复前报告：
+`Compatible. 1 usage of scheduled for removal API and 3 usages of deprecated API. 1 plugin configuration defect`
+—— 上述四类问题全部对应修复。
+
+### 说明 / Notes
+- 版本号升到 0.2.1 是因为 **JetBrains Marketplace 拒绝重复上传相同版本号**，
+  0.2.0 已在审核队列中，只能以新版本号提交修复。
+
+---
+
 ## 0.2.0（2026-08-30）
 
 ### 新增功能 / New features

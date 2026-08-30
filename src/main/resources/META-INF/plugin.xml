@@ -41,8 +41,11 @@
 ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
-    <!-- JCEF 内嵌浏览器（JBCefBrowser）必须声明此依赖，否则真实 IDE 中插件类加载器找不到 com.intellij.ui.jcef 包 -->
-    <depends>com.intellij.modules.jcef</depends>
+    <!-- JCEF 内嵌浏览器：声明为 optional，避免旧平台（2023.x–2025.2）因缺失 com.intellij.modules.jcef 模块而拒绝安装。
+         代码里通过 JBCefApp.isSupported() 做运行时防御，不可用时回退到说明面板。
+         规范：optional="true" 必须同时声明 config-file（否则市场扫描报
+         OptionalDependencyConfigFileNotSpecified），故配一个 JCEF 可用时才加载的附加配置文件。 -->
+    <depends optional="true" config-file="dsh-jcef.xml">com.intellij.modules.jcef</depends>
 
     <!-- since-build 231 = Android Studio 2023.1+ / IntelliJ IDEA 2023.1+; no until-build so future versions are allowed -->
     <idea-version since-build="231"/>

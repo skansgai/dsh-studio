@@ -4,7 +4,8 @@ import com.deepseek.dshstudio.DshStudioConstants;
 import com.deepseek.dshstudio.util.DshUtil;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.fileChooser.FileChooser;
-import com.intellij.openapi.fileChooser.FileTypeDescriptor;
+import com.intellij.openapi.fileChooser.FileChooserDescriptor;
+import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory;
 import com.intellij.openapi.options.Configurable;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBLabel;
@@ -32,6 +33,11 @@ import java.io.File;
  * 设置页：Settings → Tools → DeepSeek Harness。
  */
 public final class DshSettingsConfigurable implements Configurable {
+
+    /** 背景图片选择器允许的扩展名（小写）。 */
+    private static final java.util.Set<String> BACKGROUND_IMAGE_EXTENSIONS =
+            new java.util.HashSet<>(java.util.Arrays.asList(
+                    "png", "jpg", "jpeg", "svg", "webp", "gif", "bmp"));
 
     private final JBTextField serverUrlField = new JBTextField();
     private final JSpinner startPortSpinner = new JSpinner(new SpinnerNumberModel(3080, 0, 65535, 1));
@@ -200,7 +206,13 @@ public final class DshSettingsConfigurable implements Configurable {
     }
 
     private void chooseBackgroundImage() {
-        FileTypeDescriptor descriptor = new FileTypeDescriptor("背景图片", "png", "jpg", "jpeg", "svg", "webp", "gif", "bmp");
+        // 注意：FileTypeDescriptor 已被标记 scheduled-for-removal，且 FileChooserDescriptor
+        // 没有 withExtensionFilter（那是新版 API），这里用 withFileFilter(Condition) 过滤扩展名。
+        FileChooserDescriptor descriptor = FileChooserDescriptorFactory.createSingleFileDescriptor()
+                .withFileFilter(file -> {
+                    String ext = file.getExtension();
+                    return ext != null && BACKGROUND_IMAGE_EXTENSIONS.contains(ext.toLowerCase());
+                });
         com.intellij.openapi.vfs.VirtualFile file = FileChooser.chooseFile(
                 descriptor, null, null);
         if (file != null && file.getPath() != null) {

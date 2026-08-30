@@ -18,7 +18,9 @@ public final class StartServerAction extends AnAction {
     public StartServerAction(@NotNull Project project) {
         super("Start Server",
                 "Start the DeepSeek Harness web server",
-                IconManager.getInstance().getIcon("/icons/dsh-start.svg", StartServerAction.class));
+                // getIcon(String, Class) 已 deprecated；用 ClassLoader 重载（非弃用写法）
+                IconManager.getInstance().getIcon("/icons/dsh-start.svg",
+                        StartServerAction.class.getClassLoader()));
         this.project = project;
     }
 
