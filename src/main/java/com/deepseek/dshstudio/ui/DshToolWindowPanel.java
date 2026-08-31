@@ -327,10 +327,11 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     }
 
     /**
-     * 把背景图作为半透明浮层注入到 dsh 网页之上，并在 dsh 界面内注入「通用设置」面板
-     * （背景图选择 + 浮层透明度），控制项位于 dsh 网页自身。
-     * JCEF 原生窗口上 Swing 盖不住，故用往页面 DOM 注入 fixed + pointer-events:none 的浮层实现；
-     * 浮层不拦截鼠标事件。设置保存在 dsh 页面 localStorage；首次用 IntelliJ 旧设置做种子。
+     * 把背景图作为半透明浮层注入到 dsh 网页之上（fixed + pointer-events:none）；
+     * 同时把「背景图 / 浮层透明度」控制项直接注入到 dsh 网页自带的「通用设置」面板内容区，
+     * 跟随 dsh 设置弹窗出现，不再使用右下角悬浮按钮。
+     * JCEF 原生窗口上 Swing 盖不住，故用往页面 DOM 注入的方式实现；浮层不拦截鼠标事件。
+     * 设置保存在 dsh 页面 localStorage；首次用 IntelliJ 旧设置做种子。
      */
     private void injectBackgroundOverlay() {
         if (browser == null || OVERLAY_SCRIPT.isEmpty()) {
