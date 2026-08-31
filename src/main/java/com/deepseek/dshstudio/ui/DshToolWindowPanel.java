@@ -17,6 +17,7 @@ import com.intellij.openapi.actionSystem.ActionManager;
 import com.intellij.openapi.actionSystem.ActionToolbar;
 import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.actionSystem.Separator;
+import com.intellij.openapi.application.PathManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.application.ApplicationManager;
@@ -114,7 +115,8 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
             this.browser = DshJcefSupport.createBrowser();
             this.browserComponent = this.browser != null ? DshJcefSupport.getComponent(this.browser) : null;
             if (this.browser != null) {
-                DshJcefSupport.installConsoleSync(this.browser, this::onPageSync);
+                // 回传桥（网页选图 → 插件持久化）+ 加载完成桥（刷新后自动重注入浮层）
+                DshJcefSupport.installBridges(this.browser, this::onPageSync, this::onPageLoaded);
             }
         } else {
             this.browser = null;
@@ -301,8 +303,7 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         if (!url.equals(loadedUrl)) {
             loadedUrl = url;
             DshJcefSupport.loadURL(browser, url);
-            injectPageTheme();
-            injectBackgroundOverlay();
+            scheduleReinject(); // 首次加载同样异步，注入交给加载完成桥 + 延迟兜底
         }
     }
 
@@ -383,8 +384,10 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
             }
         }
         int opacity = (int) Math.round(Math.max(0.0, Math.min(1.0, s.backgroundImageOpacity)) * 100);
-        String restoreLine = "window.__dshRestore={bg:" + (bg.isEmpty() ? "null" : ("\"" + bg + "\""))
-                + ",opacity:" + opacity + "};";
+        // bg 字段总是带上（空串 = 已清空），并把 applied 标记复位：
+        // 插件端是权威存储，每次注入都让页面按权威值恢复一次，之后 2s 轮询不再覆盖页面内的改动。
+        String restoreLine = "window.__dshRestore={bg:\"" + escapeJs(bg == null ? "" : bg)
+                + "\",opacity:" + opacity + "};window.__dshRestoreApplied=false;";
         String script = OVERLAY_SCRIPT.replace("/*SEED*/", restoreLine);
         DshJcefSupport.executeJavaScript(browser, script);
     }
@@ -392,36 +395,105 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     /**
      * 接收 dsh 网页回传的背景图 / 透明度，持久化到插件设置（刷新后由 {@link #injectBackgroundOverlay} 重新注入）。
      * 回传格式：{@code {"bg":"data:image/...;base64,..","op":15}}。
+     *
+     * <p>{@code bg} 为空串表示「用户点了移除背景」，必须真正清空设置 —— 不能像早先那样
+     * 只在非空时才写，否则刷新后旧图会被重新注入回来。</p>
      */
     private void onPageSync(@NotNull String json) {
-        String bg = "";
-        double op = -1;
-        int bi = json.indexOf("\"bg\":");
-        if (bi >= 0) {
-            int q1 = json.indexOf('"', bi + 5);
-            int q2 = json.indexOf('"', q1 + 1);
-            if (q1 > 0 && q2 > q1) bg = json.substring(q1 + 1, q2);
-        }
-        int oi = json.indexOf("\"op\":");
-        if (oi >= 0) {
-            String num = json.substring(oi + 5).replaceAll("[,}\\s].*", "");
-            try {
-                op = Double.parseDouble(num);
-            } catch (NumberFormatException ignore) {
-                op = -1;
-            }
-        }
-        if (bg.isEmpty() && op < 0) {
+        final String bg = extractJsonString(json, "bg"); // null = 本次未带该字段
+        final double op = extractJsonNumber(json, "op"); // -1 = 本次未带该字段
+        if (bg == null && op < 0) {
             return;
         }
-        final String fBg = bg;
-        final double fOp = op;
         ApplicationManager.getApplication().invokeLater(() -> {
+            if (disposed) {
+                return;
+            }
             DshSettingsState s = DshSettingsState.getInstance();
-            if (!fBg.isEmpty()) s.backgroundImagePath = fBg;
-            if (fOp >= 0) s.backgroundImageOpacity = Math.max(0.0, Math.min(1.0, fOp / 100.0));
+            if (bg != null) {
+                if (bg.isEmpty()) {
+                    s.backgroundImagePath = "";
+                } else if (bg.startsWith("data:image")) {
+                    // data URI 落盘成文件，设置里只存路径，避免把几百 KB base64 写进 IDE 的 XML 配置
+                    s.backgroundImagePath = storeBackgroundFile(bg);
+                } else {
+                    s.backgroundImagePath = bg;
+                }
+            }
+            if (op >= 0) {
+                s.backgroundImageOpacity = Math.max(0.0, Math.min(1.0, op / 100.0));
+            }
             applyBackgroundImages(); // 同步 IDE 状态栏 / 空白页背景
         });
+    }
+
+    /** 取 JSON 里的字符串字段；字段不存在返回 null（区别于空串"已清空"）。 */
+    @Nullable
+    private static String extractJsonString(@NotNull String json, @NotNull String key) {
+        String needle = "\"" + key + "\":\"";
+        int i = json.indexOf(needle);
+        if (i < 0) {
+            return json.contains("\"" + key + "\":") ? "" : null;
+        }
+        int start = i + needle.length();
+        int end = json.indexOf('"', start);
+        return end > start ? json.substring(start, end) : "";
+    }
+
+    /** 取 JSON 里的数字字段；不存在或非法返回 -1。 */
+    private static double extractJsonNumber(@NotNull String json, @NotNull String key) {
+        String needle = "\"" + key + "\":";
+        int i = json.indexOf(needle);
+        if (i < 0) {
+            return -1;
+        }
+        String tail = json.substring(i + needle.length()).replaceAll("[^0-9.\\-].*", "");
+        try {
+            return tail.isEmpty() ? -1 : Double.parseDouble(tail);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * 把网页回传的 data:image URI 写进插件配置目录（{@code <config>/dshstudio/background.*}），
+     * 返回文件绝对路径；失败返回空串。同时清掉其它扩展名的旧文件，避免换图后残留。
+     */
+    @NotNull
+    private static String storeBackgroundFile(@NotNull String dataUri) {
+        try {
+            int comma = dataUri.indexOf(',');
+            if (comma < 0) {
+                return "";
+            }
+            String header = dataUri.substring(0, comma);
+            String ext = header.contains("image/png") ? ".png"
+                    : header.contains("image/webp") ? ".webp"
+                    : header.contains("image/gif") ? ".gif" : ".jpg";
+            byte[] bytes = Base64.getDecoder().decode(dataUri.substring(comma + 1));
+            Path dir = Paths.get(PathManager.getConfigPath(), "dshstudio");
+            Files.createDirectories(dir);
+            Path target = dir.resolve("background" + ext);
+            Files.write(target, bytes);
+            for (String other : new String[]{".png", ".webp", ".gif", ".jpg"}) {
+                if (!other.equals(ext)) {
+                    try {
+                        Files.deleteIfExists(dir.resolve("background" + other));
+                    } catch (IOException ignored) {
+                        // 残留文件不影响功能
+                    }
+                }
+            }
+            return target.toString();
+        } catch (IOException | IllegalArgumentException e) {
+            return "";
+        }
+    }
+
+    /** 注入 JS 字符串字面量前的最小转义。 */
+    private static String escapeJs(@NotNull String raw) {
+        return raw.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\r", "").replace("\n", "");
     }
 
     private static String mimeOf(@NotNull String path) {
@@ -466,10 +538,39 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     private void reloadPage() {
         if (embeddedEnabled && browser != null) {
             DshJcefSupport.reload(browser);
-            injectPageTheme();
-            injectBackgroundOverlay();
+            // reload 是异步的：不能在这里立刻注入（会打在正在卸载的旧页面上）。
+            // 正常路径由加载完成桥 onPageLoaded() 注入，这里只排延迟重注入做兜底。
+            scheduleReinject();
         }
         loadUrlOnce();
+    }
+
+    /** 页面加载完成（含刷新后）回调：来自 CEF 线程，切回 EDT 再注入。 */
+    private void onPageLoaded() {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (disposed || project.isDisposed()) {
+                return;
+            }
+            injectPageTheme();
+            injectBackgroundOverlay();
+        });
+    }
+
+    /**
+     * 延迟多次重注入，兜底两种情况：加载完成桥在某些 IDE 的 JCEF 版本上挂不上；
+     * 或 dsh 这个 SPA 在 onLoadEnd 之后才把 DOM 挂上。
+     */
+    private void scheduleReinject() {
+        for (int delay : new int[]{500, 1500, 3000}) {
+            Timer t = new Timer(delay, e -> {
+                if (!disposed && !project.isDisposed()) {
+                    injectPageTheme();
+                    injectBackgroundOverlay();
+                }
+            });
+            t.setRepeats(false);
+            t.start();
+        }
     }
 
     private void updateStatus() {

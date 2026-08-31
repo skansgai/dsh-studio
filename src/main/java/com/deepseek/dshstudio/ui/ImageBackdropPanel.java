@@ -3,7 +3,7 @@ package com.deepseek.dshstudio.ui;
 import com.intellij.util.ui.JBUI;
 import org.jetbrains.annotations.Nullable;
 
-import javax.swing.ImageIcon;
+import javax.imageio.ImageIO;
 import javax.swing.JPanel;
 import java.awt.Color;
 import java.awt.Graphics;
@@ -12,6 +12,7 @@ import java.awt.Image;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.IOException;
 
 /**
  * 可绘制背景图的 Panel：有背景图时按 cover 方式铺满并轻微压暗，否则用普通背景色。
@@ -32,15 +33,25 @@ public final class ImageBackdropPanel extends JPanel {
         setOpaque(false);
     }
 
-    /** 设置背景图（绝对路径）。路径无效或无法加载则清空背景图。 */
+    /**
+     * 设置背景图（绝对路径）。路径无效或无法加载则清空背景图。
+     *
+     * <p>用 {@link ImageIO#read(File)} 而不是 {@code ImageIcon}：后者走
+     * {@code Toolkit.getImage(String)}，会按文件名缓存图像。背景图固定写在同一个路径
+     * （{@code <config>/dshstudio/background.*}），用缓存会导致换图后仍显示旧图。</p>
+     */
     public void setBackgroundImage(@Nullable String path) {
         Image loaded = null;
         if (path != null && !path.trim().isEmpty()) {
             File f = new File(path.trim());
             if (f.isFile()) {
-                ImageIcon icon = new ImageIcon(f.getAbsolutePath());
-                if (icon.getIconWidth() > 0) {
-                    loaded = toImage(icon.getImage());
+                try {
+                    BufferedImage read = ImageIO.read(f);
+                    if (read != null) {
+                        loaded = toImage(read);
+                    }
+                } catch (IOException ignored) {
+                    // 非图片或读取失败：视为无背景图
                 }
             }
         }

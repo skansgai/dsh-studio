@@ -3,11 +3,22 @@
   var KEY_BG = 'dshStudio.bg', KEY_OP = 'dshStudio.opacity';
   var SYNC_PREFIX = 'DSHSTUDIO_SYNC:';
 
+  // —— 存储：localStorage 优先，不可用时退到内存（插件端才是权威存储，这里只是本页缓存）——
+  function get(k) {
+    try { var v = localStorage.getItem(k); if (v !== null) return v; } catch (e) { /* 忽略 */ }
+    return (window.__dshMem || {})[k] != null ? window.__dshMem[k] : null;
+  }
+  function set(k, v) {
+    try { localStorage.setItem(k, v); } catch (e) { /* 忽略 */ }
+    window.__dshMem = window.__dshMem || {};
+    window.__dshMem[k] = v;
+  }
+  function curBg() { return get(KEY_BG) || ''; }
+  function curOp() { var o = parseFloat(get(KEY_OP)); return isNaN(o) ? 15 : o; }
+
   // 背景半透明浮层：fixed + pointer-events:none，盖在 dsh 界面之上但不挡点击
   function applyOverlay() {
-    var bg = localStorage.getItem(KEY_BG) || '';
-    var op = parseFloat(localStorage.getItem(KEY_OP));
-    if (isNaN(op)) op = 15;
+    var bg = curBg();
     var d = document.getElementById('dsh-bg-overlay');
     if (!bg) {
       if (d && d.parentNode) d.parentNode.removeChild(d);
@@ -17,9 +28,12 @@
       d = document.createElement('div');
       d.id = 'dsh-bg-overlay';
       (document.body || document.documentElement).appendChild(d);
+    } else if (d.parentNode !== (document.body || document.documentElement)) {
+      // SPA 重绘可能把浮层挪出/移除，重新挂回去
+      (document.body || document.documentElement).appendChild(d);
     }
     d.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;z-index:900000;pointer-events:none;'
-      + 'background-image:url("' + bg + '");background-size:cover;background-position:center;background-repeat:no-repeat;opacity:' + (op / 100) + ';';
+      + 'background-image:url("' + bg + '");background-size:cover;background-position:center;background-repeat:no-repeat;opacity:' + (curOp() / 100) + ';';
   }
 
   // 根据页面当前颜色方案选择卡片配色，尽量融入 dsh 主题
@@ -96,7 +110,7 @@
       + 'background:' + c.bg + ';color:' + c.fg + ';font-family:inherit;font-size:13px;';
     card.innerHTML =
       '<div style="font-weight:600;margin-bottom:4px;">背景图 · DSH Studio 增强</div>'
-      + '<div style="opacity:0.75;margin-bottom:12px;font-size:12px;">为界面叠加半透明背景图（仅本机 dsh 网页生效，设置保存在本机插件）。</div>'
+      + '<div style="opacity:0.75;margin-bottom:12px;font-size:12px;">为界面叠加半透明背景图（保存在本机插件配置，刷新与重启后保留）。</div>'
       + '<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap;">'
       + '<label style="min-width:64px;opacity:0.85;">背景图片</label>'
       + '<input data-dsh="bg-file" type="file" accept="image/*" style="color:' + c.fg + ';">'
@@ -112,21 +126,23 @@
       if (!file) return;
       pickAndCompress(file, function (dataUrl) {
         if (!dataUrl) return;
-        localStorage.setItem(KEY_BG, dataUrl);
+        set(KEY_BG, dataUrl);
         applyOverlay();
+        styleTopBar();
         syncCard();
         reportSync();
       });
     });
     card.querySelector('[data-dsh="bg-clear"]').addEventListener('click', function () {
-      localStorage.setItem(KEY_BG, '');
+      set(KEY_BG, '');
       applyOverlay();
+      styleTopBar();
       syncCard();
-      reportSync();
+      reportSync(); // 回传空串 → 插件端真正清空，刷新后不会再被恢复
     });
     var range = card.querySelector('[data-dsh="op-range"]');
     range.addEventListener('input', function () {
-      localStorage.setItem(KEY_OP, range.value);
+      set(KEY_OP, range.value);
       applyOverlay();
       syncCard();
       scheduleSync(); // 拖动时防抖回传
@@ -146,9 +162,7 @@
   function syncCard() {
     var card = document.querySelector('[data-dshstudio="bg"]');
     if (!card) return;
-    var bg = localStorage.getItem(KEY_BG) || '';
-    var op = parseFloat(localStorage.getItem(KEY_OP));
-    if (isNaN(op)) op = 15;
+    var bg = curBg(), op = curOp();
     var range = card.querySelector('[data-dsh="op-range"]');
     if (range) { range.value = op; card.querySelector('[data-dsh="op-val"]').textContent = op + '%'; }
     var prev = card.querySelector('[data-dsh="bg-preview"]');
@@ -183,12 +197,9 @@
     reader.readAsDataURL(file);
   }
 
-  // 把当前 bg/op 回传给插件（前缀被 Java 端 CefDisplayHandler 拦截）
+  // 把当前 bg/op 回传给插件（前缀被 Java 端 CefDisplayHandler 拦截并持久化）
   function reportSync() {
-    var bg = localStorage.getItem(KEY_BG) || '';
-    var op = parseFloat(localStorage.getItem(KEY_OP));
-    if (isNaN(op)) op = 15;
-    try { console.log(SYNC_PREFIX + JSON.stringify({ bg: bg, op: op })); } catch (e) { /* 忽略 */ }
+    try { console.log(SYNC_PREFIX + JSON.stringify({ bg: curBg(), op: curOp() })); } catch (e) { /* 忽略 */ }
   }
   var syncTimer = null;
   function scheduleSync() {
@@ -196,9 +207,8 @@
     syncTimer = setTimeout(reportSync, 300);
   }
 
-  // 让 dsh 网页顶部菜单栏半透明 + 模糊，使背景图透出，视觉与浮层统一
+  // 让 dsh 网页顶部菜单栏半透明 + 模糊，使背景图透出；无背景图时还原原样式
   function styleTopBar() {
-    var c = themeColors();
     var sels = ['header', '[role="banner"]', '[class*="header" i]', '[class*="topbar" i]',
       '[class*="navbar" i]', '[class*="appbar" i]'];
     var el = null;
@@ -209,16 +219,27 @@
       }
     }
     if (!el) return;
-    el.style.background = c.topbar;
+    if (!curBg()) {
+      if (el.__dshOrigBg !== undefined) {
+        el.style.background = el.__dshOrigBg;
+        el.style.backdropFilter = '';
+        el.style.webkitBackdropFilter = '';
+      }
+      return;
+    }
+    if (el.__dshOrigBg === undefined) el.__dshOrigBg = el.style.background;
+    el.style.background = themeColors().topbar;
     el.style.backdropFilter = 'blur(10px)';
     el.style.webkitBackdropFilter = 'blur(10px)';
   }
 
   function ensure() {
-    // 插件端权威值（每次注入都会带上）：刷新后用它恢复，不依赖 JCEF localStorage 跨 reload 持久化
-    if (window.__dshRestore) {
-      if (window.__dshRestore.bg) localStorage.setItem(KEY_BG, window.__dshRestore.bg);
-      if (window.__dshRestore.opacity != null) localStorage.setItem(KEY_OP, String(window.__dshRestore.opacity));
+    // 插件端权威值：每次注入带一次，只应用一次（applied 标记由注入前缀复位）。
+    // 只应用一次很关键 —— 否则 2s 轮询会把用户刚在页面里清空/改掉的值又覆盖回去。
+    if (window.__dshRestore && !window.__dshRestoreApplied) {
+      window.__dshRestoreApplied = true;
+      set(KEY_BG, window.__dshRestore.bg || '');
+      if (window.__dshRestore.opacity != null) set(KEY_OP, String(window.__dshRestore.opacity));
     }
     applyOverlay();
 
@@ -236,8 +257,11 @@
   }
 
   if (document.readyState !== 'loading') { ensure(); }
-  else { document.addEventListener('DOMContentLoaded', ensure); }
-  setTimeout(ensure, 1500);
+  else { document.addEventListener('DOMContentLoaded', ensure, { once: true }); }
+  // SPA 首屏渲染可能晚于脚本注入，补几拍
+  setTimeout(ensure, 300);
+  setTimeout(ensure, 1000);
+  setTimeout(ensure, 2500);
   // 避免重复注入时定时器叠加：用单一句柄
   if (window.__dshInterval) clearInterval(window.__dshInterval);
   window.__dshInterval = setInterval(ensure, 2000);

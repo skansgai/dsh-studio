@@ -133,37 +133,108 @@ public final class DshJcefSupport {
         }
     }
 
+    /** 页面 JS 回传数据用的 console 消息前缀。 */
+    private static final String SYNC_PREFIX = "DSHSTUDIO_SYNC:";
+
     /**
-     * 在页面 JS 里用特定前缀（{@code DSHSTUDIO_SYNC:}）的 console.log 把数据回传给插件。
-     * 用于把 dsh 网页里选的背景图 / 透明度持久化到插件设置（刷新后由插件重新注入，避免丢失）。
+     * 安装两条页面桥接（都靠反射 + JDK 动态代理，失败静默降级，不影响主功能）：
      *
-     * <p>实现方式：反射拿到 CefClient，用 JDK 动态代理挂一个 {@code CefDisplayHandler}，
-     * 在 {@code onConsoleMessage} 中过滤前缀并回调。JCEF 不可用或版本差异导致反射失败时静默降级
-     * （仅失去回传能力，不影响主功能）。</p>
+     * <ol>
+     *   <li><b>回传桥</b>（{@code CefDisplayHandler}）：拦截页面里以 {@code DSHSTUDIO_SYNC:}
+     *       开头的 {@code console.log}，把 dsh 网页选的背景图 / 透明度回传给插件持久化。</li>
+     *   <li><b>加载完成桥</b>（{@code CefLoadHandler}）：页面每次加载完成（包含用户点刷新后的 reload）
+     *       都回调 {@code onLoadEnd}，由插件重新注入浮层脚本。这是「刷新后背景消失」的根治点 ——
+     *       {@code reload()} 是异步的，调用后立刻注入只会打在正在卸载的旧页面上。</li>
+     * </ol>
+     *
+     * <p>挂载优先用 {@code JBCefClient.addXxxHandler(handler, cefBrowser)}（平台提供的多路复用
+     * 版本，可与 JBCefBrowser 自带的 handler 共存）；该 API 不可用时降级到
+     * {@code CefClient.addXxxHandler(handler)} 单参写法。</p>
      */
-    public static void installConsoleSync(@NotNull Object browser, @NotNull Consumer<String> onSync) {
+    public static void installBridges(@NotNull Object browser,
+                                     @NotNull Consumer<String> onSync,
+                                     @NotNull Runnable onLoadEnd) {
+        Object cefBrowser;
         try {
-            Object cefBrowser = browser.getClass().getMethod("getCefBrowser").invoke(browser);
-            if (cefBrowser == null) return;
-            Object cefClient = cefBrowser.getClass().getMethod("getClient").invoke(cefBrowser);
-            if (cefClient == null) return;
-            Class<?> dhIface = Class.forName("org.cef.handler.CefDisplayHandler");
-            InvocationHandler handler = (proxy, method, args) -> {
-                if ("onConsoleMessage".equals(method.getName()) && args != null && args.length == 5) {
-                    Object msg = args[2];
-                    if (msg instanceof String && ((String) msg).startsWith("DSHSTUDIO_SYNC:")) {
-                        onSync.accept(((String) msg).substring("DSHSTUDIO_SYNC:".length()));
+            cefBrowser = browser.getClass().getMethod("getCefBrowser").invoke(browser);
+        } catch (Throwable t) {
+            return;
+        }
+        if (cefBrowser == null) {
+            return;
+        }
+
+        // ① console 回传桥
+        try {
+            Class<?> iface = Class.forName("org.cef.handler.CefDisplayHandler");
+            InvocationHandler h = (proxy, method, args) -> {
+                if ("onConsoleMessage".equals(method.getName()) && args != null && args.length >= 3
+                        && args[2] instanceof String) {
+                    String msg = (String) args[2];
+                    if (msg.startsWith(SYNC_PREFIX)) {
+                        onSync.accept(msg.substring(SYNC_PREFIX.length()));
+                        // 返回 true 表示该消息已被消费，不再打进 IDE 日志
+                        return method.getReturnType() == boolean.class ? Boolean.TRUE : defaultValue(method);
                     }
                 }
-                Class<?> ret = method.getReturnType();
-                if (ret == boolean.class) return Boolean.FALSE;
-                if (ret == int.class) return 0;
-                return null;
+                return defaultValue(method);
             };
-            Object proxy = Proxy.newProxyInstance(dhIface.getClassLoader(), new Class[]{dhIface}, handler);
-            cefClient.getClass().getMethod("addDisplayHandler", dhIface).invoke(cefClient, proxy);
+            addHandler(browser, cefBrowser, "addDisplayHandler", iface,
+                    Proxy.newProxyInstance(iface.getClassLoader(), new Class[]{iface}, h));
         } catch (Throwable ignored) {
-            // JCEF 版本差异或不支持：失去回传能力但不影响主流程
+            // 该 IDE 的 JCEF 版本不支持：失去回传能力，但浮层仍可由插件权威值注入
         }
+
+        // ② 页面加载完成桥（刷新后自动重新注入）
+        try {
+            Class<?> iface = Class.forName("org.cef.handler.CefLoadHandler");
+            InvocationHandler h = (proxy, method, args) -> {
+                String name = method.getName();
+                if ("onLoadEnd".equals(name)) {
+                    onLoadEnd.run();
+                } else if ("onLoadingStateChange".equals(name) && args != null && args.length >= 2
+                        && Boolean.FALSE.equals(args[1])) {
+                    onLoadEnd.run(); // isLoading == false
+                }
+                return defaultValue(method);
+            };
+            addHandler(browser, cefBrowser, "addLoadHandler", iface,
+                    Proxy.newProxyInstance(iface.getClassLoader(), new Class[]{iface}, h));
+        } catch (Throwable ignored) {
+            // 降级：由调用方的延迟重注入兜底
+        }
+    }
+
+    /** 优先用 JBCefClient 的多路复用 API 挂 handler，不可用时退回 CefClient 单参写法。 */
+    private static void addHandler(@NotNull Object browser, @NotNull Object cefBrowser,
+                                   @NotNull String methodName, @NotNull Class<?> iface,
+                                   @NotNull Object proxy) throws Exception {
+        try {
+            Object jbClient = browser.getClass().getMethod("getJBCefClient").invoke(browser);
+            if (jbClient != null) {
+                Class<?> browserIface = Class.forName("org.cef.browser.CefBrowser");
+                jbClient.getClass().getMethod(methodName, iface, browserIface)
+                        .invoke(jbClient, proxy, cefBrowser);
+                return;
+            }
+        } catch (Throwable ignored) {
+            // 落到下面的 CefClient 单参写法
+        }
+        Object cefClient = cefBrowser.getClass().getMethod("getClient").invoke(cefBrowser);
+        if (cefClient != null) {
+            cefClient.getClass().getMethod(methodName, iface).invoke(cefClient, proxy);
+        }
+    }
+
+    /** 动态代理里未处理的方法返回类型安全的默认值。 */
+    @Nullable
+    private static Object defaultValue(@NotNull Method method) {
+        Class<?> ret = method.getReturnType();
+        if (ret == boolean.class) return Boolean.FALSE;
+        if (ret == int.class) return 0;
+        if (ret == long.class) return 0L;
+        if (ret == double.class) return 0d;
+        if (ret == float.class) return 0f;
+        return null;
     }
 }
