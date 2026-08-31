@@ -47,6 +47,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Base64;
 
 /**
@@ -111,6 +113,9 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         if (embeddedEnabled) {
             this.browser = DshJcefSupport.createBrowser();
             this.browserComponent = this.browser != null ? DshJcefSupport.getComponent(this.browser) : null;
+            if (this.browser != null) {
+                DshJcefSupport.installConsoleSync(this.browser, this::onPageSync);
+            }
         } else {
             this.browser = null;
             this.browserComponent = null;
@@ -215,11 +220,32 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         return browserHolder;
     }
 
-    /** 把设置里的背景图应用到状态栏条与空白页。 */
+    /** 把设置里的背景图应用到状态栏条与空白页（支持本地路径与 data: URI）。 */
     private void applyBackgroundImages() {
         String path = DshSettingsState.getInstance().backgroundImagePath;
-        statusBarPanel.setBackgroundImage(path);
-        emptyStatePanel.setBackgroundImage(path);
+        String file = toLocalImageFile(path);
+        statusBarPanel.setBackgroundImage(file);
+        emptyStatePanel.setBackgroundImage(file);
+    }
+
+    /**
+     * 把 data:image URI 解码成临时 png 文件（ImageBackdropPanel 只吃本地路径）；
+     * 本地路径或非法值时原样返回 / 返回空。临时文件落在系统临时目录，覆盖写，无需清理。
+     */
+    private static String toLocalImageFile(@Nullable String path) {
+        if (path == null || !path.startsWith("data:image")) {
+            return path;
+        }
+        try {
+            int comma = path.indexOf(',');
+            if (comma < 0) return "";
+            byte[] bytes = Base64.getDecoder().decode(path.substring(comma + 1));
+            Path tmp = Paths.get(System.getProperty("java.io.tmpdir"), "dshstudio-bg.png");
+            Files.write(tmp, bytes);
+            return tmp.toString();
+        } catch (IOException | IllegalArgumentException e) {
+            return "";
+        }
     }
 
     /** 已连接且已加载页面时切到浏览器卡片，否则显示背景图空白卡片；内嵌不可用时显示说明。 */
@@ -331,33 +357,71 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
      * 同时把「背景图 / 浮层透明度」控制项直接注入到 dsh 网页自带的「通用设置」面板内容区，
      * 跟随 dsh 设置弹窗出现，不再使用右下角悬浮按钮。
      * JCEF 原生窗口上 Swing 盖不住，故用往页面 DOM 注入的方式实现；浮层不拦截鼠标事件。
-     * 设置保存在 dsh 页面 localStorage；首次用 IntelliJ 旧设置做种子。
+     *
+     * <p>刷新不丢的关键：dsh 网页里选的图/透明度会通过 console 回传并持久化到插件设置
+     * （{@link #onPageSync}），这里把插件端的权威值以 {@code window.__dshRestore} 注入，
+     * 页面每次（含刷新后）加载都用它恢复，不再依赖 JCEF 的 localStorage 跨 reload 持久化。</p>
      */
     private void injectBackgroundOverlay() {
         if (browser == null || OVERLAY_SCRIPT.isEmpty()) {
             return;
         }
         DshSettingsState s = DshSettingsState.getInstance();
-        // 用已有设置做“首次种子”，让旧版在 IntelliJ 设置里配过的图/透明度能带过来；
-        // 一旦网页端 localStorage 写过，就不再覆盖（用户在 dsh 页里改的优先）。
-        String seedBg = "";
-        String path = s.backgroundImagePath;
-        if (path != null && !path.trim().isEmpty()) {
-            File f = new File(path.trim());
+        // 插件端权威值：本地路径转 data URI 注入；已是 data:image 则原样用。
+        String bg = s.backgroundImagePath;
+        if (bg != null && !bg.isEmpty() && !bg.startsWith("data:image")) {
+            File f = new File(bg.trim());
             if (f.isFile() && f.length() < 3L * 1024 * 1024) {
                 try {
                     byte[] bytes = Files.readAllBytes(f.toPath());
-                    seedBg = "data:" + mimeOf(path) + ";base64," + Base64.getEncoder().encodeToString(bytes);
+                    bg = "data:" + mimeOf(bg) + ";base64," + Base64.getEncoder().encodeToString(bytes);
                 } catch (IOException ignored) {
-                    // 读不到就用空种子
+                    bg = "";
                 }
+            } else {
+                bg = "";
             }
         }
-        int seedOpacity = (int) Math.round(Math.max(0.0, Math.min(1.0, s.backgroundImageOpacity)) * 100);
-        String seedLine = "window.__dshSeed={bg:" + (seedBg.isEmpty() ? "null" : ("\"" + seedBg + "\""))
-                + ",opacity:" + seedOpacity + "};";
-        String script = OVERLAY_SCRIPT.replace("/*SEED*/", seedLine);
+        int opacity = (int) Math.round(Math.max(0.0, Math.min(1.0, s.backgroundImageOpacity)) * 100);
+        String restoreLine = "window.__dshRestore={bg:" + (bg.isEmpty() ? "null" : ("\"" + bg + "\""))
+                + ",opacity:" + opacity + "};";
+        String script = OVERLAY_SCRIPT.replace("/*SEED*/", restoreLine);
         DshJcefSupport.executeJavaScript(browser, script);
+    }
+
+    /**
+     * 接收 dsh 网页回传的背景图 / 透明度，持久化到插件设置（刷新后由 {@link #injectBackgroundOverlay} 重新注入）。
+     * 回传格式：{@code {"bg":"data:image/...;base64,..","op":15}}。
+     */
+    private void onPageSync(@NotNull String json) {
+        String bg = "";
+        double op = -1;
+        int bi = json.indexOf("\"bg\":");
+        if (bi >= 0) {
+            int q1 = json.indexOf('"', bi + 5);
+            int q2 = json.indexOf('"', q1 + 1);
+            if (q1 > 0 && q2 > q1) bg = json.substring(q1 + 1, q2);
+        }
+        int oi = json.indexOf("\"op\":");
+        if (oi >= 0) {
+            String num = json.substring(oi + 5).replaceAll("[,}\\s].*", "");
+            try {
+                op = Double.parseDouble(num);
+            } catch (NumberFormatException ignore) {
+                op = -1;
+            }
+        }
+        if (bg.isEmpty() && op < 0) {
+            return;
+        }
+        final String fBg = bg;
+        final double fOp = op;
+        ApplicationManager.getApplication().invokeLater(() -> {
+            DshSettingsState s = DshSettingsState.getInstance();
+            if (!fBg.isEmpty()) s.backgroundImagePath = fBg;
+            if (fOp >= 0) s.backgroundImageOpacity = Math.max(0.0, Math.min(1.0, fOp / 100.0));
+            applyBackgroundImages(); // 同步 IDE 状态栏 / 空白页背景
+        });
     }
 
     private static String mimeOf(@NotNull String path) {

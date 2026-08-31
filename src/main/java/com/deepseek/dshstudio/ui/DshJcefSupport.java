@@ -6,7 +6,10 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import javax.swing.JComponent;
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.util.function.Consumer;
 
 /**
  * JCEF 浏览器能力的反射封装。
@@ -127,6 +130,40 @@ public final class DshJcefSupport {
     public static void dispose(@Nullable Object browser) {
         if (browser instanceof Disposable) {
             Disposer.dispose((Disposable) browser);
+        }
+    }
+
+    /**
+     * 在页面 JS 里用特定前缀（{@code DSHSTUDIO_SYNC:}）的 console.log 把数据回传给插件。
+     * 用于把 dsh 网页里选的背景图 / 透明度持久化到插件设置（刷新后由插件重新注入，避免丢失）。
+     *
+     * <p>实现方式：反射拿到 CefClient，用 JDK 动态代理挂一个 {@code CefDisplayHandler}，
+     * 在 {@code onConsoleMessage} 中过滤前缀并回调。JCEF 不可用或版本差异导致反射失败时静默降级
+     * （仅失去回传能力，不影响主功能）。</p>
+     */
+    public static void installConsoleSync(@NotNull Object browser, @NotNull Consumer<String> onSync) {
+        try {
+            Object cefBrowser = browser.getClass().getMethod("getCefBrowser").invoke(browser);
+            if (cefBrowser == null) return;
+            Object cefClient = cefBrowser.getClass().getMethod("getClient").invoke(cefBrowser);
+            if (cefClient == null) return;
+            Class<?> dhIface = Class.forName("org.cef.handler.CefDisplayHandler");
+            InvocationHandler handler = (proxy, method, args) -> {
+                if ("onConsoleMessage".equals(method.getName()) && args != null && args.length == 5) {
+                    Object msg = args[2];
+                    if (msg instanceof String && ((String) msg).startsWith("DSHSTUDIO_SYNC:")) {
+                        onSync.accept(((String) msg).substring("DSHSTUDIO_SYNC:".length()));
+                    }
+                }
+                Class<?> ret = method.getReturnType();
+                if (ret == boolean.class) return Boolean.FALSE;
+                if (ret == int.class) return 0;
+                return null;
+            };
+            Object proxy = Proxy.newProxyInstance(dhIface.getClassLoader(), new Class[]{dhIface}, handler);
+            cefClient.getClass().getMethod("addDisplayHandler", dhIface).invoke(cefClient, proxy);
+        } catch (Throwable ignored) {
+            // JCEF 版本差异或不支持：失去回传能力但不影响主流程
         }
     }
 }
