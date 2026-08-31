@@ -21,7 +21,7 @@ DeepSeek Harness is DeepSeek's open-source coding-agent framework; `dsh web` ser
 - **Headless tasks**: `Tools → DeepSeek Harness → Run Headless Task…` runs a one-shot `dsh --profile headless` task inside the IDE, output goes to the Server Log.
 - **Configurable**: URL, port, start command, working directory (workspace root), `DSH_HOME`, auto-start, embedded browser toggle.
 - **Theme**: pick Follow IDE / Light / Dark in settings; the tool-window top bar is tinted to match.
-- **Image overlay (in dsh web UI)**: a gear button injected into the DeepSeek Harness web page opens a **通用设置** panel where you pick a background image and adjust overlay opacity (0–60%); the image is overlaid on the dsh UI as a click-through CSS layer and persists in the page's local storage.
+- **Image overlay (set in dsh web "通用设置")**: open dsh web **Settings → 通用设置**; a "DeepSeek Harness Studio" card appears with a background-image picker and an overlay-opacity slider (0–60%, default 15%). The image is overlaid on the dsh UI as a click-through CSS layer; settings are persisted by the plugin, so they survive refresh and IDE restart.
 
 ## Compatibility
 
@@ -63,6 +63,22 @@ DeepSeek Harness is DeepSeek's open-source coding-agent framework; `dsh web` ser
 - **Status bar widget**: a DSH status control on the bottom-right status bar, initially "not connected". Click it to open the Harness tool window; it turns green ("running") once the server is ready.
 - **Recent sessions**: `Tools → DeepSeek Harness → Recent Harness Sessions…` opens the session list; picking one copies its sessionId to the clipboard and opens the tool window (note: the dsh web UI does not support session deep links yet, so we jump via "copy ID + open tool window").
 - **Headless tasks**: `Tools → DeepSeek Harness → Run Headless Task…` runs `dsh --profile headless "task"` in the background, output streamed to the Server Log.
+
+### How to set a background image
+
+The background image is configured **inside the dsh web UI's "通用设置"** (not the IntelliJ plugin settings page):
+
+1. Open the DeepSeek Harness tool window and connect to the server (see Quick start).
+2. In the dsh web UI, click **Settings** (gear ⚙) at the top-right to open the settings dialog.
+3. In the left menu, click **通用设置** (General).
+4. Find the **DeepSeek Harness Studio** card in the panel, which contains:
+   - **背景图片 (Background image)**: click "选择图片" to pick a local image; click "移除背景" to clear it.
+   - **浮层透明度 (Overlay opacity)**: drag the slider to adjust transparency (0–60%, default 15%; higher = fainter image, clearer text).
+5. Once selected, the image shows immediately as a click-through translucent overlay on the dsh UI.
+
+**Persistence**: the image and opacity are saved by the plugin (with your IDE config), so clicking **↻ refresh** or restarting the IDE keeps the background — no need to re-pick it. To turn it off, open the same card and click "移除背景".
+
+> Note: these controls are injected into dsh's "通用设置" panel by this plugin. If a dsh upgrade changes the panel structure and they disappear, update this plugin.
 
 ### Settings (Settings → Tools → DeepSeek Harness)
 

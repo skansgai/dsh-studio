@@ -5,10 +5,17 @@
 ## 0.3.0（2026-08-31）
 
 ### 新增功能 / New features
-- **背景图 + 透明度设置移至 dsh 网页内置「通用设置」**：在 dsh 界面内注入一个齿轮按钮 → 弹出「通用设置」面板，
-  可在此选择背景图片、调节浮层透明度（0–60%）；背景以 `fixed` + `pointer-events:none` 的 CSS 半透明浮层
-  叠在 dsh 界面之上（鼠标点击不受影响），设置保存在 dsh 网页本地（localStorage），刷新后保留。
+- **背景图 + 透明度控制项注入进 dsh 网页「通用设置」面板**：在 dsh 网页「设置 → 通用设置」面板内自动插入
+  「DeepSeek Harness Studio」卡片（背景图片选择 / 浮层透明度滑块，0–60% 默认 15%），不再是右下角悬浮齿轮按钮；
+  背景以 `fixed` + `pointer-events:none` 的 CSS 半透明浮层叠在 dsh 界面之上（鼠标点击不受影响）。
 - IntelliJ 设置页（Settings → Tools → DeepSeek Harness）不再包含背景图/透明度项，仅保留「通用设置 / 服务器 / 启动选项」分区与界面主题。
+
+### 修复 / Fixes
+- **刷新后背景图丢失**：根因为 `reload()` 异步而注入脚本同步打在了正在卸载的旧页面上；改为挂 `CefLoadHandler`
+  在页面每次加载完成时自动重注入，并加 500/1500/3000ms 延迟兜底。背景图改由插件端持久化（落盘 `<config>/dshstudio/background.*`，
+  设置只存路径），刷新或重启 IDE 后保留。
+- **「移除背景」无效**：原逻辑忽略清空回传，刷新后旧图复活；改为区分「字段不存在」与「空串=清空」，空串真正清除。
+- 图片经 `CefDisplayHandler` 回传桥（拦截 `DSHSTUDIO_SYNC:` 前缀的 console.log）回传插件并持久化；JCEF 不可用时静默降级。
 
 ### 内部实现 / Implementation
 - 新增资源脚本 `src/main/resources/dsh/overlay.js`：注入「通用设置」浮层 + 背景浮层；`DshToolWindowPanel` 通过类加载器读取并执行。
