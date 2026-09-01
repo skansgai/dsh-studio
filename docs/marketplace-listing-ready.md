@@ -138,10 +138,13 @@ Tools Integration
 
 ## 6. Documentation URL
 https://github.com/skansgai/dsh-studio
-⚠️ 待确认：代码是否已 push 到该仓库（否则链接 404）。
+✅ 已 push，链接有效。
 
-## 7. Screenshots（建议 4 张，待真机截图）
-- 01-toolwindow.png — 内嵌 dsh 对话界面
-- 02-send-code.png — 编辑器右键「Send Code to Harness」
-- 03-statusbar-log.png — 状态栏小部件 + Server Log 标签页
-- 04-background.png — 0.3.0 背景图效果（个性化卖点）
+## 7. Screenshots（4 张已备，位于 `docs/screenshots/`）
+- `01-main-view-dark.png` — 深色主题 + 半透明背景图（主要界面）
+- `02-main-view-light.png` — 浅色主题 + 半透明背景图
+- `03-background-settings.png` — 0.3.0 卖点：Harness 设置 → 通用设置里的「背景图 / 浮层透明度」控制卡片
+- `04-main-view-dark-alt.png` — 深色主题主界面（另一角度/会话态）
+
+> 建议上传顺序：01 → 02 → 03 → 04。第 3 张最能体现 0.3.0 个性化特性，可作首图或重点图。
+> JetBrains 要求：建议 16:9 或 4:3，尺寸 ≥ 1280×800 最佳；当前截图来自 IDE 工具窗口，直接上传即可。

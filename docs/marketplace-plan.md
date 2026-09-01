@@ -14,11 +14,11 @@
 | 0.3.0 上架 | ✅ 已上传 Marketplace（plugin id 33569），正式版可装 | 审核/搜索可见性确认中 |
 | 0.3.0 特性 | 背景图/透明度注入 dsh 网页「通用设置」+ 刷新持久化，已真机验证并上架 | — |
 | 上架文案 | `docs/marketplace-listing.md` 中英文已备 | 待回填市场字段 |
-| 截图 | 无 | 列表页缺图，转化率低（最高优先级） |
-| GitHub | 文档 URL 写 `github.com/skansgai/dsh-studio` | **代码是否 push 待确认**（未 push 时链接 404） |
+| 截图 | ✅ 已备 4 张（`docs/screenshots/`） | — |
+| GitHub | ✅ 已 push（merge commit `be1b1b9`） | — |
 | 正式签名证书 | ✅ 已用正式证书签名并上传 | — |
 
-**结论**：工程侧 0.3.0 已闭环并上架，发布链路已通。当前重心转到「列表页转化优化（补截图/回填文案）+ 增长推广 + 后续功能路线」。**唯一未闭合的工程项**是 GitHub 代码是否 push（决定文档链接是否 404）。
+**结论**：工程侧 0.3.0 已闭环并上架，发布链路已通，GitHub 已 push（`be1b1b9`），4 张截图已入 `docs/screenshots/`。当前重心转到「回填市场列表字段 + 增长推广 + 后续功能路线」。
 
 ---
 
@@ -48,11 +48,12 @@
 按 JetBrains [Marketplace 最佳实践](https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html)：
 
 1. **标题/副标题关键词**：`DeepSeek Harness Studio` 已含核心词；Description 首段必须出现 `DeepSeek`、`Harness`、`coding agent`、`Android Studio`、`IntelliJ`。
-2. **截图 3–4 张**（当前缺失，优先级最高）：
-   - 工具窗口内嵌 dsh 对话界面；
-   - 编辑器右键「Send Code to Harness」；
-   - 状态栏小部件 + Server Log；
-   - 0.3.0 背景图效果（展示个性化卖点）。
+2. **截图 4 张**（✅ 已备，见 `docs/screenshots/`）：
+   - `01-main-view-dark.png` — 深色主题 + 半透明背景图；
+   - `02-main-view-light.png` — 浅色主题 + 半透明背景图；
+   - `03-background-settings.png` — Harness 设置 → 通用设置里的「背景图 / 浮层透明度」控制卡片（0.3.0 核心卖点）；
+   - `04-main-view-dark-alt.png` — 深色主题主界面备选图。
+   - 建议上传顺序：01 → 02 → 03 → 04，第 3 张可作首图。
 3. **分类**：`Tools Integration`。
 4. **标签（Tags）**：`deepseek`、`harness`、`ai`、`coding-agent`、`android-studio`、`intellij`。
 5. **Description**：直接回填 `docs/marketplace-listing.md` 的 Markdown 版，并补一段 0.3.0 背景图特性。
@@ -100,9 +101,9 @@
 ## 七、下一步行动清单（按依赖排序）
 
 - [x] **1. 正式签名证书**：✅ 已用自有证书签名并上传 0.3.0。
-- [ ] **2. Git push（待确认）**：0.3.0 已上架不代表代码已 push。若 `github.com/skansgai/dsh-studio` 仍 404，请提供 GitHub Personal Access Token（或本地 `git push origin main`）把 0.3.0 提交 + 文档推上去，让 `Documentation URL` 生效。
+- [x] **2. Git push**：✅ 已 push（merge commit `be1b1b9`），`github.com/skansgai/dsh-studio` 链接有效。
 - [x] **3. 上传 0.3.0**：✅ 已上架 plugin id 33569。
-- [ ] **4. 补 4 张截图**：工具窗口 / 右键发送代码 / 状态栏+日志 / 背景图效果（当前最高优先级）。
+- [x] **4. 补 4 张截图**：✅ 已入 `docs/screenshots/`（01 深色主界面 / 02 浅色主界面 / 03 背景设置卡片 / 04 深色备选）。
 - [ ] **5. 回填列表字段**：用 `docs/marketplace-listing.md` 文案填 Getting Started + Description，补 0.3.0 背景图段。
 - [ ] **6. 发一版推广帖**：中文社区 + Reddit 各一篇，附 GitHub 与 Marketplace 链接。
 - [ ] **7. 排期 0.3.1**：先做「端口占用自愈」这类低风险高感知修复，维持更新节奏。
@@ -112,6 +113,6 @@
 ## 八、风险与待确认
 
 1. ~~测试证书不能上传市场~~ ✅ 已用正式证书解决。
-2. **GitHub 仓库归属**：`Documentation URL` 填的是 `skansgai/dsh-studio`，需确认这是你的真实账号且代码已 push（0.3.0 上架不代表代码已推）。
+2. ~~GitHub 仓库归属 / push~~ ✅ 已确认 `skansgai/dsh-studio` 为真实仓库，代码已 push（`be1b1b9`）。
 3. ~~0.3.0 是否已在市场~~ ✅ 已确认上架。
 4. **dsh 版本耦合**：背景图/透明度靠注入 dsh 网页 DOM，dsh 大版本改版可能失效 → 发版前在真机验证一次，并在 CHANGELOG 标注「适配 dsh @x.y.z」。
