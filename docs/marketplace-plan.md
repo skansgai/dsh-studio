@@ -10,15 +10,15 @@
 
 | 项 | 状态 | 缺口 |
 |---|---|---|
-| 0.2.0 上架 | 已上传 Marketplace（plugin id 33569） | 审核/搜索可见性需确认 |
-| 0.3.0 构建 | `build/distributions/dsh-studio-0.3.0-signed.zip` 已出 | **用的是测试证书**，不能上传市场 |
-| 0.3.0 特性 | 背景图/透明度注入进 dsh 网页「通用设置」，刷新持久化已真机验证 | 尚未上传 |
-| 上架文案 | `docs/marketplace-listing.md` 中英文 Getting Started + Description 已备 | 未回填到市场字段 |
-| 截图 | 无 | 上架缺图，搜索转化率低 |
-| GitHub | 文档 URL 写 `github.com/skansgai/dsh-studio` | **本地代码未 push**（无 GitHub token），链接当前 404 |
-| 正式签名证书 | 仅测试证书 | 上传市场前必须换正式证书 |
+| 0.2.0 上架 | 已上传 Marketplace（plugin id 33569） | 已被 0.3.0 取代 |
+| 0.3.0 上架 | ✅ 已上传 Marketplace（plugin id 33569），正式版可装 | 审核/搜索可见性确认中 |
+| 0.3.0 特性 | 背景图/透明度注入 dsh 网页「通用设置」+ 刷新持久化，已真机验证并上架 | — |
+| 上架文案 | `docs/marketplace-listing.md` 中英文已备 | 待回填市场字段 |
+| 截图 | 无 | 列表页缺图，转化率低（最高优先级） |
+| GitHub | 文档 URL 写 `github.com/skansgai/dsh-studio` | **代码是否 push 待确认**（未 push 时链接 404） |
+| 正式签名证书 | ✅ 已用正式证书签名并上传 | — |
 
-**结论**：工程侧 0.3.0 已闭环，卡点在「发布链路」（正式证书 + GitHub push + 上传）。先把发布链路打通，再谈增长。
+**结论**：工程侧 0.3.0 已闭环并上架，发布链路已通。当前重心转到「列表页转化优化（补截图/回填文案）+ 增长推广 + 后续功能路线」。**唯一未闭合的工程项**是 GitHub 代码是否 push（决定文档链接是否 404）。
 
 ---
 
@@ -67,7 +67,7 @@
 
 | 优先级 | 功能 | 价值 | 风险/依赖 | 建议版本 |
 |---|---|---|---|---|
-| P0 | **打通发布链路**：正式证书 + GitHub push + 上传 0.3.0 + 补截图 | 让 0.3.0 真正可装 | 需用户提供正式证书/token | 立刻 |
+| P0 | ~~打通发布链路~~ ✅ **已完成**：正式证书 + 上传 0.3.0（0.3.0 已上架 plugin 33569） | 0.3.0 可装 | — | 完成 |
 | P1 | **错误自愈**：端口被占用时自动换端口并提示 | 降低「启动失败」差评 | 低 | 0.3.1 |
 | P1 | **多会话侧边栏**：在工具窗口内并列/切换多个 dsh 会话 | 高感知效率提升 | 中（SPA 路由） | 0.3.x |
 | P2 | **换肤联动 dsh 主题**：插件主题选项同时写 `settings.update` 改 dsh 自身主题（API 已验证可行） | 视觉统一 | 低（已 curl 验证） | 0.3.x |
@@ -99,10 +99,10 @@
 
 ## 七、下一步行动清单（按依赖排序）
 
-- [ ] **1. 正式签名证书**：按 `PUBLISHING.zh.md` ② 用 `openssl` 生成自有私钥+证书（替换 `signing.local/` 测试证书），有效期建议 `-days 3650`。
-- [ ] **2. Git push**：提供 GitHub Personal Access Token（或你本地 `git push origin main`），把 0.3.0 提交 + 文档推上去，让 `Documentation URL` 生效。
-- [ ] **3. 上传 0.3.0**：用正式证书 `buildPlugin signPlugin` → 市场网页上传 `-signed.zip`（首次必须手动上传）。
-- [ ] **4. 补 4 张截图**：工具窗口 / 右键发送代码 / 状态栏+日志 / 背景图效果。
+- [x] **1. 正式签名证书**：✅ 已用自有证书签名并上传 0.3.0。
+- [ ] **2. Git push（待确认）**：0.3.0 已上架不代表代码已 push。若 `github.com/skansgai/dsh-studio` 仍 404，请提供 GitHub Personal Access Token（或本地 `git push origin main`）把 0.3.0 提交 + 文档推上去，让 `Documentation URL` 生效。
+- [x] **3. 上传 0.3.0**：✅ 已上架 plugin id 33569。
+- [ ] **4. 补 4 张截图**：工具窗口 / 右键发送代码 / 状态栏+日志 / 背景图效果（当前最高优先级）。
 - [ ] **5. 回填列表字段**：用 `docs/marketplace-listing.md` 文案填 Getting Started + Description，补 0.3.0 背景图段。
 - [ ] **6. 发一版推广帖**：中文社区 + Reddit 各一篇，附 GitHub 与 Marketplace 链接。
 - [ ] **7. 排期 0.3.1**：先做「端口占用自愈」这类低风险高感知修复，维持更新节奏。
@@ -111,7 +111,7 @@
 
 ## 八、风险与待确认
 
-1. **测试证书不能上传市场**：当前 `signing.local.properties` 是测试证书，上传会被拒 → 必须走 §七.1。
-2. **GitHub 仓库归属**：`Documentation URL` 填的是 `skansgai/dsh-studio`，需确认这是你的真实账号，且代码能 push 上去。
-3. **0.3.0 是否已在市场**：若 0.2.0 还在「待审核」，先确认 0.2.0 状态再决定直接传 0.3.0 还是等审核。
+1. ~~测试证书不能上传市场~~ ✅ 已用正式证书解决。
+2. **GitHub 仓库归属**：`Documentation URL` 填的是 `skansgai/dsh-studio`，需确认这是你的真实账号且代码已 push（0.3.0 上架不代表代码已推）。
+3. ~~0.3.0 是否已在市场~~ ✅ 已确认上架。
 4. **dsh 版本耦合**：背景图/透明度靠注入 dsh 网页 DOM，dsh 大版本改版可能失效 → 发版前在真机验证一次，并在 CHANGELOG 标注「适配 dsh @x.y.z」。
