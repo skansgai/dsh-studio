@@ -1,0 +1,11 @@
+快速上手
+
+1. 安装：Settings -> Plugins -> Marketplace 搜索 "DeepSeek Harness"，安装后重启 IDE。
+2. 打开：点击右侧工具窗口栏的蓝色六边形图标，或 Tools -> DeepSeek Harness。
+3. 连接：若本机已运行 dsh web（默认 http://127.0.0.1:3080）会自动连接；否则点击 ▶ 启动（需 Node.js 18+，首次运行会自动安装 DeepSeek Harness）。
+4. 配置模型：在 Harness 界面 Settings -> Models 填入你的 API Key（如 DeepSeek 官方 Key）。
+5. 开用：新建会话、选择模型，开始对话/写代码。
+
+常用功能：▶ 启动 / ⏹ 停止服务器（顶部工具栏）、↻ 刷新页面、Server Log 标签页查看日志、Settings -> Tools -> DeepSeek Harness 配置主题/端口/工作目录/DSH_HOME；背景图与透明度在 Harness 网页「通用设置」内设置。
+
+环境要求：Android Studio 2023.1+ / IntelliJ IDEA 2023.1+；自动启动服务器需 Node.js 18+。

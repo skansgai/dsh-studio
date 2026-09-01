@@ -1,0 +1,7 @@
+# Summary（顶部一句话，贴到 Summary 字段）
+
+英文（推荐，市场以英文检索为主）:
+IDE-native entry for DeepSeek Harness: embedded UI, one-click start/stop, send code to chat, custom background.
+
+中文:
+DeepSeek Harness 的 IDE 原生入口：内嵌网页、一键启停、右键发代码、个性化背景。

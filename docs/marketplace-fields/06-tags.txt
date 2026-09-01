@@ -1,0 +1,1 @@
+deepseek, harness, ai, coding-agent, android-studio, intellij, code-assistant
