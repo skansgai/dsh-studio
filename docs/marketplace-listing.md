@@ -23,7 +23,7 @@ Quick Start
 4. Configure the model: inside the Harness UI open Settings -> Models and add your API key (e.g. a DeepSeek API key).
 5. Go: create a session, pick a model, and start chatting / coding.
 
-Everyday controls: Start / Stop server (toolbar), Refresh (page), Server Log tab (troubleshooting), Settings -> Tools -> DeepSeek Harness (theme, background image, port, working directory, DSH_HOME).
+Everyday controls: Start / Stop server (toolbar), Refresh (page), Server Log tab (troubleshooting), Settings -> Tools -> DeepSeek Harness (IDE theme, port, working directory, DSH_HOME). Background image & opacity are set inside the Harness web UI (Settings -> 通用设置).
 
 Requirements: Android Studio 2023.1+ / IntelliJ IDEA 2023.1+; Node.js 18+ for the automatic server start.
 ```
@@ -39,7 +39,7 @@ Requirements: Android Studio 2023.1+ / IntelliJ IDEA 2023.1+; Node.js 18+ for th
 4. 配置模型：在 Harness 界面 Settings -> Models 填入你的 API Key（如 DeepSeek 官方 Key）。
 5. 开用：新建会话、选择模型，开始对话/写代码。
 
-常用功能：▶ 启动 / ⏹ 停止服务器（顶部工具栏）、↻ 刷新页面、Server Log 标签页查看日志、Settings -> Tools -> DeepSeek Harness 配置主题/背景图/端口/工作目录/DSH_HOME。
+常用功能：▶ 启动 / ⏹ 停止服务器（顶部工具栏）、↻ 刷新页面、Server Log 标签页查看日志、Settings -> Tools -> DeepSeek Harness 配置主题/端口/工作目录/DSH_HOME；背景图与透明度在 Harness 网页「通用设置」内设置。
 
 环境要求：Android Studio 2023.1+ / IntelliJ IDEA 2023.1+；自动启动服务器需 Node.js 18+。
 ```
@@ -79,7 +79,7 @@ Open the **DeepSeek Harness** web UI right inside **Android Studio** / **Intelli
 - ▶ Start / ⏹ Stop the server (toolbar on top)
 - ↻ Refresh the page
 - Server Log tab for troubleshooting
-- Settings → Tools → DeepSeek Harness: theme, background image, port, working directory, DSH_HOME
+- Settings → Tools → DeepSeek Harness: theme, port, working directory, DSH_HOME
 
 **Requirements**: Android Studio 2023.1+ / IntelliJ IDEA 2023.1+; Node.js 18+ is needed only for the automatic server start.
 
@@ -117,7 +117,7 @@ DeepSeek Harness is DeepSeek's open-source coding agent framework; this plugin i
 - ▶ 启动 / ⏹ 停止服务器（顶部工具栏）
 - ↻ 刷新页面
 - Server Log 标签页查看日志
-- Settings → Tools → DeepSeek Harness：主题、背景图、端口、工作目录、DSH_HOME
+- Settings → Tools → DeepSeek Harness：主题、端口、工作目录、DSH_HOME
 
 **环境要求**：Android Studio 2023.1+ / IntelliJ IDEA 2023.1+；仅自动启动服务器时需要 Node.js 18+。
 
