@@ -16,9 +16,13 @@
   <li><b>Recent sessions</b>: search-style popup listing Harness sessions, jump straight to one</li>
   <li><b>Headless tasks</b>: run a one-shot <code>dsh --profile headless</code> task from the IDE, output lands in the Server Log</li>
   <li>Open the same page in your system browser at any time</li>
-  <li>Configurable URL / port / working directory (workspace root) / <code>DSH_HOME</code> / auth token</li>
-  <li><b>Theme</b>: pick Follow IDE / Light / Dark; the DeepSeek Harness web page itself can follow (writes <code>ui-theme.preference</code>)</li>
-  <li><b>Plugins</b> tab: browse the dsh plugin market, list / install / uninstall DeepSeek Harness plugins from the IDE (auto-restarts the server to load them)</li>
+  <li>Configurable URL / port / working directory (workspace root) / <code>DSH_HOME</code></li>
+</ul>
+
+<h3>Personalize (0.3.0)</h3>
+<ul>
+  <li>Set a semi-transparent background image and overlay opacity directly inside the Harness web UI (<b>Settings &rarr; 通用设置</b>); the choice persists across restarts and refreshes.</li>
+  <li>The Harness top bar turns translucent so the background shows through, matching the IDE look.</li>
 </ul>
 
 <h3>Quick Start</h3>
@@ -30,12 +34,10 @@
   <li><b>Go</b>: create a session, pick a model, and start chatting / coding.</li>
 </ol>
 
-<h3>Everyday controls</h3>
+<h3>Settings</h3>
 <ul>
-  <li><b>&#9654; Start / &#9632; Stop</b> the server (toolbar on top of the tool window)</li>
-  <li><b>&#8635; Refresh</b> the page</li>
-  <li><b>Server Log</b> tab for troubleshooting</li>
-  <li><b>Settings &rarr; Tools &rarr; DeepSeek Harness</b>: theme, background image, port, working directory, DSH_HOME</li>
+  <li><b>Tools &rarr; DeepSeek Harness</b>: IDE theme, port, working directory, <code>DSH_HOME</code>.</li>
+  <li><b>Harness web UI &rarr; 通用设置</b>: background image &amp; overlay opacity (0.3.0).</li>
 </ul>
 
 <p>Requirements: Android Studio 2023.1+ / IntelliJ IDEA 2023.1+; Node.js 18+ is needed only for the automatic server start.</p>
