@@ -233,6 +233,328 @@
     el.style.webkitBackdropFilter = 'blur(10px)';
   }
 
+  // —— 关于区块：插件版本 + dsh 版本 + 检查更新 ——
+  // dsh 0.1.2-rc.1 的设置对话框只有「通用设置 / 模型 / 插件 / 插件列表」，没有原生的「关于」面板，
+  // 所以这里克隆一个已有的导航条目造一个出来，并配一个独立内容页。
+  // 克隆（而不是自己拼 class）是为了让样式与原生条目一致，也不依赖 dsh 内部的面板注册机制
+  // —— 那是服务端插件才有的权限，注入脚本拿不到。
+  var ABOUT_NAV_TITLES = ['通用设置', '模型', '插件列表'];
+  var ABOUT_NAV = 'about-nav';
+  var ABOUT_PANEL = 'about-panel';
+  var aboutState = { nav: null, item: null, panel: null, content: null, dimmed: null, active: false };
+
+  function leavesWithExactText(root, texts) {
+    var all = root.querySelectorAll('*');
+    var out = [];
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].children.length !== 0) continue;
+      if (texts.indexOf((all[i].textContent || '').trim()) !== -1) out.push(all[i]);
+    }
+    return out;
+  }
+
+  function ancestorChain(node) {
+    var a = [], e = node;
+    while (e) { a.unshift(e); e = e.parentElement; }
+    return a;
+  }
+
+  /** 设置对话框的左侧导航容器：几个导航标题叶子节点"最深的共同祖先"。 */
+  function findNavContainer(dialog) {
+    var leaves = leavesWithExactText(dialog, ABOUT_NAV_TITLES);
+    if (leaves.length < 2) return null;
+    // 同一标题只取第一个：最靠前的通常是导航项，而不是当前面板里同名的标题
+    var seen = {}, picked = [];
+    for (var i = 0; i < leaves.length; i++) {
+      var t = (leaves[i].textContent || '').trim();
+      if (seen[t]) continue;
+      seen[t] = 1;
+      picked.push(leaves[i]);
+    }
+    if (picked.length < 2) return null;
+    var chain = ancestorChain(picked[0]);
+    var best = null;
+    for (var c = 0; c < chain.length; c++) {
+      var el = chain[c];
+      if (el === document.body || el === document.documentElement) continue;
+      var holds = true;
+      for (var k = 1; k < picked.length; k++) {
+        if (!el.contains(picked[k])) { holds = false; break; }
+      }
+      if (holds) best = el; // 循环跑完时保留的是最深的那个
+    }
+    // 孩子太多说明判错了层级（比如命中了整个对话框），宁可放弃也别把内容塞错地方
+    return (best && best.children.length >= 2 && best.children.length <= 12) ? best : null;
+  }
+
+  /** 内容区：导航容器的同级里最宽的那个兄弟（dsh 是"左导航 + 右内容"两栏布局）。 */
+  function findContentArea(nav) {
+    var el = nav;
+    for (var up = 0; up < 5 && el; up++) {
+      var parent = el.parentElement;
+      if (!parent) break;
+      var best = null, bestW = 0;
+      for (var k = 0; k < parent.children.length; k++) {
+        var sib = parent.children[k];
+        if (sib === el || sib.getAttribute('data-dshstudio') === ABOUT_PANEL) continue;
+        var w = sib.offsetWidth || 0;
+        if (w > bestW) { bestW = w; best = sib; }
+      }
+      if (best && bestW >= 150) return best;
+      el = parent;
+    }
+    return null;
+  }
+
+  function closestWithAttr(node, attr, value) {
+    var e = node;
+    while (e && e.nodeType === 1) {
+      if (e.getAttribute && e.getAttribute(attr) === value) return e;
+      e = e.parentElement;
+    }
+    return null;
+  }
+
+  function activeNativeNavItem(nav) {
+    if (!nav) return null;
+    var c = nav.querySelectorAll('[aria-selected="true"],[data-active="true"],[aria-current="true"]');
+    for (var i = 0; i < c.length; i++) {
+      if (c[i].getAttribute('data-dshstudio') !== ABOUT_NAV) return c[i];
+    }
+    return null;
+  }
+
+  // 当关于处于激活态时，把原生高亮项压暗、把关于项标为高亮，做出"互斥"的视觉效果。
+  function markAboutActive(on) {
+    var s = aboutState;
+    if (!s.item) return;
+    if (on) {
+      s.item.setAttribute('aria-selected', 'true');
+      s.item.setAttribute('data-active', 'true');
+      var src = activeNativeNavItem(s.nav);
+      if (src && src !== s.item) {
+        var cs = getComputedStyle(src);
+        s.item.style.setProperty('background', cs.backgroundColor, 'important');
+        s.item.style.setProperty('color', cs.color, 'important');
+        s.item.style.setProperty('font-weight', cs.fontWeight, 'important');
+        // !important 顶住 dsh 重绘对样式的内联覆盖
+        src.style.setProperty('opacity', '0.5', 'important');
+        s.dimmed = src;
+      }
+    } else {
+      s.item.removeAttribute('aria-selected');
+      s.item.removeAttribute('data-active');
+      s.item.style.removeProperty('background');
+      s.item.style.removeProperty('color');
+      s.item.style.removeProperty('font-weight');
+    }
+    if (!on && s.dimmed) {
+      s.dimmed.style.removeProperty('opacity');
+      s.dimmed = null;
+    }
+  }
+
+  // 按 s.active 强制应用可见性。用 !important 顶住 dsh 重绘时对 display 的内联覆盖，
+  // 这样"关于"页和其它菜单之间才真正互斥、且不闪退。
+  function applyAbout() {
+    var s = aboutState;
+    if (!s.item || !s.panel || !s.content) return;
+    if (s.active) {
+      s.content.style.setProperty('display', 'none', 'important');
+      s.panel.style.setProperty('display', 'block', 'important');
+      markAboutActive(true);
+    } else {
+      s.content.style.removeProperty('display');
+      s.panel.style.setProperty('display', 'none', 'important');
+      markAboutActive(false);
+    }
+  }
+
+  /** 克隆一个原生导航条目，把标题换成「关于」。 */
+  function buildAboutNavItem(nav, srcItem, titleText) {
+    var item = srcItem.cloneNode(true);
+    item.setAttribute('data-dshstudio', ABOUT_NAV);
+    item.removeAttribute('aria-selected');
+    item.removeAttribute('data-active');
+    item.removeAttribute('aria-current');
+    var inner = item.querySelectorAll('*');
+    for (var i = 0; i < inner.length; i++) {
+      if (inner[i].children.length === 0 && (inner[i].textContent || '').trim() === titleText) {
+        inner[i].textContent = '关于';
+        break;
+      }
+    }
+    nav.appendChild(item);
+    return item;
+  }
+
+  function onAboutNavClick(e) {
+    // 只处理真实用户点击：dsh 自身的标签切换有时会派发合成 click（isTrusted===false），
+    // 若对它响应会把"关于"页误关掉，表现为"闪一下就消失"。
+    if (e.isTrusted === false) return;
+    if (closestWithAttr(e.target || e.srcElement, 'data-dshstudio', ABOUT_NAV)) {
+      aboutState.active = true;
+    } else if (aboutState.active) {
+      aboutState.active = false;
+    } else {
+      return;
+    }
+    applyAbout();
+  }
+
+  function bindAboutNav() {
+    var s = aboutState;
+    if (!s.nav || s.nav.getAttribute('data-dshstudio-nav-bound') === '1') return;
+    s.nav.setAttribute('data-dshstudio-nav-bound', '1');
+    s.nav.addEventListener('click', onAboutNavClick, true);
+  }
+
+  function ensureAbout() {
+    var dialog = document.querySelector('[role="dialog"]');
+    if (!dialog) dialog = findSettingsDialog();
+    if (!dialog) { aboutState.active = false; return false; }
+
+    var s = aboutState;
+    var navItem = dialog.querySelector('[data-dshstudio="' + ABOUT_NAV + '"]');
+    var panel = dialog.querySelector('[data-dshstudio="' + ABOUT_PANEL + '"]');
+    if (navItem && panel && s.content && s.content.isConnected) {
+      s.item = navItem;
+      s.panel = panel;
+      var oldCard = panel.querySelector('[data-dshstudio="about"]');
+      if (oldCard) updateAboutTheme(oldCard);
+      bindAboutNav();
+      applyAbout();
+      return true;
+    }
+
+    var nav = findNavContainer(dialog);
+    if (!nav) return false;
+    var content = findContentArea(nav);
+    if (!content || !content.parentElement) return false;
+
+    // 找一个原生导航条目作为克隆模板
+    var srcItem = null, titleText = '';
+    var titles = leavesWithExactText(nav, ABOUT_NAV_TITLES);
+    for (var i = 0; i < titles.length && !srcItem; i++) {
+      for (var k = 0; k < nav.children.length; k++) {
+        if (nav.children[k].contains(titles[i])) {
+          srcItem = nav.children[k];
+          titleText = (titles[i].textContent || '').trim();
+          break;
+        }
+      }
+    }
+    if (!srcItem) return false;
+
+    if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+    panel = document.createElement('div');
+    panel.setAttribute('data-dshstudio', ABOUT_PANEL);
+    panel.style.cssText = 'display:none;flex:1 1 auto;min-width:0;overflow:auto;';
+    content.parentElement.insertBefore(panel, content.nextSibling);
+
+    if (navItem && navItem.parentNode) navItem.parentNode.removeChild(navItem);
+
+    s.nav = nav;
+    s.content = content;
+    s.panel = panel;
+    s.dimmed = null;
+    s.item = buildAboutNavItem(nav, srcItem, titleText);
+
+    if (!panel.querySelector('[data-dshstudio="about"]')) buildAboutCard(panel);
+    bindAboutNav();
+    applyAbout();
+    return true;
+  }
+
+  // 设置对话框是 SPA 后渲染出来的，且每次切换面板 dsh 都可能重绘导航把克隆节点冲掉，
+  // 所以挂一个防抖的 MutationObserver 持续补挂。
+  var aboutObserverStarted = false;
+  function startAboutObserver() {
+    if (aboutObserverStarted || typeof MutationObserver === 'undefined') return;
+    aboutObserverStarted = true;
+    var pending = false;
+    new MutationObserver(function () {
+      if (pending) return;
+      pending = true;
+      setTimeout(function () {
+        pending = false;
+        try { ensureAbout(); } catch (e) { /* 页面结构变了就算了，不影响主功能 */ }
+      }, 120);
+    }).observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  function buildAboutCard(anchor) {
+    var c = themeColors();
+    var card = document.createElement('div');
+    card.setAttribute('data-dshstudio', 'about');
+    card.style.cssText = 'margin:18px 0;padding:14px 16px;border:1px solid ' + c.border + ';border-radius:10px;'
+      + 'background:' + c.bg + ';color:' + c.fg + ';font-family:inherit;font-size:13px;';
+    var pv = (window.__dshStudioInfo && window.__dshStudioInfo.pluginVersion) || '…';
+    card.innerHTML =
+      '<div style="font-weight:600;margin-bottom:4px;">版本 · DSH Studio 增强</div>'
+      + '<div style="opacity:0.75;margin-bottom:12px;font-size:12px;">插件与 DeepSeek Harness 的版本信息，以及一键检查更新。</div>'
+      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;"><span style="min-width:130px;opacity:0.85;">插件版本</span><b data-dsh="pv">' + esc(pv) + '</b></div>'
+      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;"><span style="min-width:130px;opacity:0.85;">DeepSeek Harness (dsh)</span><b data-dsh="dv">查询中…</b></div>'
+      + '<button data-dsh="check" style="background:' + c.btn + ';color:' + c.btnFg + ';border:1px solid ' + c.border + ';border-radius:6px;padding:4px 12px;cursor:pointer;">检查更新</button>'
+      + '<div data-dsh="result" style="margin-top:10px;font-size:12px;line-height:1.6;"></div>';
+    anchor.appendChild(card);
+
+    card.querySelector('[data-dsh="check"]').addEventListener('click', function () {
+      var box = card.querySelector('[data-dsh="result"]');
+      if (box) { box.textContent = '检查中…'; box.style.color = ''; }
+      try { console.log(SYNC_PREFIX + JSON.stringify({ cmd: 'checkUpdate' })); } catch (e) { /* 忽略 */ }
+    });
+
+    // 请求 dsh 最新版本（插件版本已由注入种子给出）
+    try { console.log(SYNC_PREFIX + JSON.stringify({ cmd: 'version' })); } catch (e) { /* 忽略 */ }
+  }
+
+  function updateAboutTheme(card) {
+    var c = themeColors();
+    card.style.background = c.bg;
+    card.style.color = c.fg;
+    card.style.borderColor = c.border;
+    var btn = card.querySelector('[data-dsh="check"]');
+    if (btn) { btn.style.background = c.btn; btn.style.color = c.btnFg; btn.style.borderColor = c.border; }
+  }
+
+  // 插件端回传：版本信息（cmd=version 的响应）
+  window.__dshStudioVersion = function (info) {
+    var card = document.querySelector('[data-dshstudio="about"]');
+    if (!card || !info) return;
+    if (info.pluginVersion) {
+      var pv = card.querySelector('[data-dsh="pv"]');
+      if (pv) pv.textContent = info.pluginVersion;
+    }
+    var dv = card.querySelector('[data-dsh="dv"]');
+    if (dv) {
+      dv.textContent = info.dshLatest ? (info.dshLatest + '（npm 最新版）') : '（无法获取）';
+    }
+  };
+
+  // 插件端回传：检查更新结果（cmd=checkUpdate 的响应）
+  window.__dshStudioUpdate = function (res) {
+    var card = document.querySelector('[data-dshstudio="about"]');
+    if (!card || !res) return;
+    var box = card.querySelector('[data-dsh="result"]');
+    if (!box) return;
+    if (res.hasPluginUpdate) {
+      box.style.color = '#e8a33d';
+      box.innerHTML = '插件有新版 <b>v' + esc(res.pluginLatest) + '</b>（当前 v' + esc(res.installed)
+        + '）。前往 IDE 的 <b>Settings → Plugins → Marketplace</b> 搜索 “DeepSeek Harness” 更新。';
+    } else {
+      box.style.color = '';
+      var dsh = res.dshLatest ? (' DeepSeek Harness 最新 v' + esc(res.dshLatest) + '（npx 下次启动自动使用）。') : '';
+      box.innerHTML = '插件已是最新（v' + esc(res.installed) + '）。' + dsh;
+    }
+  };
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (ch) {
+      return ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : '&quot;';
+    });
+  }
+
   function ensure() {
     // 插件端权威值：每次注入带一次，只应用一次（applied 标记由注入前缀复位）。
     // 只应用一次很关键 —— 否则 2s 轮询会把用户刚在页面里清空/改掉的值又覆盖回去。
@@ -247,12 +569,13 @@
     if (dialog && isGeneralPage(dialog)) {
       var start = findMarker(dialog, ['外观', '繁忙时 Enter 键行为']);
       var anchor = start ? findListContainer(start) : dialog;
-      if (anchor) {
+        if (anchor) {
         var existing = anchor.querySelector('[data-dshstudio="bg"]');
         if (!existing) buildCard(anchor);
         else { updateCardTheme(existing); syncCard(); }
       }
     }
+    try { ensureAbout(); } catch (e) { /* 设置对话框结构变了就算了，不影响背景图等主功能 */ }
     styleTopBar();
   }
 
@@ -262,7 +585,18 @@
   setTimeout(ensure, 300);
   setTimeout(ensure, 1000);
   setTimeout(ensure, 2500);
+  startAboutObserver();
   // 避免重复注入时定时器叠加：用单一句柄
   if (window.__dshInterval) clearInterval(window.__dshInterval);
   window.__dshInterval = setInterval(ensure, 2000);
+
+  // 仅供自动化测试：window.__dshTestMode 为 true 时暴露 About 状态切换钩子，便于绕过
+  // jsdom 无法把 isTrusted 伪造为 true 的限制，直接驱动状态并断言可见性逻辑。生产环境无此全局，不受影响。
+  if (window.__dshTestMode) {
+    window.__dshAbout = {
+      activate: function () { aboutState.active = true; applyAbout(); },
+      deactivate: function () { aboutState.active = false; applyAbout(); },
+      isActive: function () { return aboutState.active; }
+    };
+  }
 })();

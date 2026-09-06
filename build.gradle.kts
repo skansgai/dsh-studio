@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.3.0"
+version = "0.3.1"
 
 repositories {
     mavenCentral()
@@ -94,6 +94,17 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
+            <h3>0.3.1</h3>
+            <ul>
+              <li><b>修复市场/IDE 中插件图标不显示</b>：将 <code>pluginIcon.svg</code> 从 JAR 根目录移到规范的 <code>META-INF/</code> 位置，并改为 40×40、无渐变（纯色）的扁平写法，规避市场 SVG 清洗器对 <code>&lt;defs&gt;</code>/渐变与 <code>width/height=240</code> 的丢弃，确保图标正常渲染。</li>
+              <li><b>设置页新增「关于」区块</b>：显示插件版本与 DeepSeek Harness (dsh) 的 npm 最新版本，并提供「检查更新」按钮，一键比对插件（Marketplace）与 dsh（npm）是否有新版本并给出升级指引。</li>
+              <li><b>dsh 网页「设置」新增「关于」标签页</b>：dsh 本身没有「关于」面板，本插件会在其设置左侧导航末尾克隆出一个「关于」条目，
+                  点进去显示插件版本、dsh（npm）版本与「检查更新」按钮；导航被 dsh 重绘冲掉时会自动补挂。</li>
+              <li><b>提示并一键清理残留的旧 dsh 实例</b>：<code>npx --yes</code> 会把 dsh 静默升级，升级前启动的进程却仍在跑，
+                  它会继续按旧结构产出 boot manifest 并从已升级的包里读取新 bundle，页面会报
+                  <code>client-modules: boot manifest batches must be an array</code>。现在启动若发现端口被非本插件的实例占用，
+                  会给出提示并提供「结束占用进程并重启」。</li>
+            </ul>
             <h3>0.3.0</h3>
             <ul>
               <li><b>背景图 + 透明度控制项注入进 dsh 网页「通用设置」面板</b>：在 dsh 网页「设置 → 通用设置」面板内自动插入

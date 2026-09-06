@@ -2,6 +2,8 @@ package com.deepseek.dshstudio.settings;
 
 import com.deepseek.dshstudio.DshStudioConstants;
 import com.deepseek.dshstudio.util.DshUtil;
+import com.intellij.notification.NotificationGroupManager;
+import com.intellij.notification.NotificationType;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.options.Configurable;
 import com.intellij.ui.JBColor;
@@ -43,6 +45,11 @@ public final class DshSettingsConfigurable implements Configurable {
     private final JCheckBox embeddedCheckBox = new JCheckBox("使用内嵌浏览器（JCEF）显示界面");
     private final JComboBox<DshUiTheme> themeCombo = new JComboBox<>(DshUiTheme.values());
     private final JBLabel testResultLabel = new JBLabel();
+
+    // ── 关于（版本 + 检查更新）────
+    private final JBLabel pluginVersionLabel = new JBLabel();
+    private final JBLabel dshVersionLabel = new JBLabel();
+    private final JButton checkUpdateButton = new JButton("检查更新");
 
     private JPanel root;
 
@@ -181,6 +188,41 @@ public final class DshSettingsConfigurable implements Configurable {
 
         addSection(box, misc);
 
+        // ── 关于（版本 + 检查更新）─────────────────────────────────────────
+        {
+            JPanel about = sectionPanel("关于");
+            GridBagConstraints ac = gridBag();
+            int ar = 0;
+
+            ac.gridy = ar++;
+            ac.gridx = 0;
+            ac.weightx = 0;
+            about.add(new JBLabel("插件版本:"), ac);
+            ac.gridx = 1;
+            ac.weightx = 1;
+            about.add(pluginVersionLabel, ac);
+
+            ac.gridy = ar++;
+            ac.gridx = 0;
+            ac.weightx = 0;
+            about.add(new JBLabel("DeepSeek Harness (dsh):"), ac);
+            ac.gridx = 1;
+            ac.weightx = 1;
+            about.add(dshVersionLabel, ac);
+
+            ac.gridy = ar++;
+            ac.gridx = 0;
+            ac.gridwidth = 2;
+            ac.weightx = 1;
+            JPanel aboutBtnRow = new JPanel(new BorderLayout(8, 0));
+            checkUpdateButton.addActionListener(e -> checkForUpdates());
+            aboutBtnRow.add(checkUpdateButton, BorderLayout.WEST);
+            about.add(aboutBtnRow, ac);
+            ac.gridwidth = 1;
+
+            addSection(box, about);
+        }
+
         root.add(new JScrollPane(box), BorderLayout.CENTER);
         reset();
         return root;
@@ -238,6 +280,80 @@ public final class DshSettingsConfigurable implements Configurable {
         });
     }
 
+    /** 异步拉取 npm 上 dsh 最新版本并刷新标签（设置页打开时自动调用）。 */
+    private void refreshDshVersion() {
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            String v = DshUtil.fetchLatestDshVersion(DshStudioConstants.API_TIMEOUT_MS);
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (v == null) {
+                    dshVersionLabel.setText("（无法获取，请检查网络）");
+                    dshVersionLabel.setForeground(JBColor.GRAY);
+                } else {
+                    dshVersionLabel.setText(v + "（npm 最新版）");
+                    dshVersionLabel.setForeground(JBColor.foreground());
+                }
+            });
+        });
+    }
+
+    /** 「检查更新」：比对插件（Marketplace）与 dsh（npm）的最新版本，弹通知给出指引。 */
+    private void checkForUpdates() {
+        checkUpdateButton.setEnabled(false);
+        checkUpdateButton.setText("检查中…");
+        String installed = pluginVersionLabel.getText();
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            String pluginLatest = DshUtil.fetchLatestPluginVersion(DshStudioConstants.API_TIMEOUT_MS);
+            String dshLatest = DshUtil.fetchLatestDshVersion(DshStudioConstants.API_TIMEOUT_MS);
+            ApplicationManager.getApplication().invokeLater(() -> {
+                checkUpdateButton.setEnabled(true);
+                checkUpdateButton.setText("检查更新");
+                if (dshLatest != null) {
+                    dshVersionLabel.setText(dshLatest + "（npm 最新版）");
+                    dshVersionLabel.setForeground(JBColor.foreground());
+                }
+                showUpdateResult(installed, pluginLatest, dshLatest);
+            });
+        });
+    }
+
+    /** 把检查结果汇总成一条通知：有插件更新用 WARNING，否则 INFORMATION。 */
+    private void showUpdateResult(String installed, String pluginLatest, String dshLatest) {
+        boolean hasUpdate = false;
+        StringBuilder sb = new StringBuilder("<html>");
+
+        // 插件
+        if (pluginLatest == null) {
+            sb.append("• <b>插件</b>：无法连接 JetBrains Marketplace 检查更新，请稍后重试。<br>");
+        } else {
+            int cmp = DshUtil.compareVersion(installed, pluginLatest);
+            if (cmp < 0) {
+                hasUpdate = true;
+                sb.append("• <b>插件</b>：有新版 <b>v").append(pluginLatest).append("</b>（当前 v")
+                        .append(installed).append("）。前往 <b>Settings → Plugins → Marketplace</b> 搜索 ")
+                        .append("“DeepSeek Harness” 更新，或访问插件页 ")
+                        .append("<a href=\"https://plugins.jetbrains.com/plugin/33569-deepseek-harness-studio\">33569</a>。<br>");
+            } else {
+                sb.append("• <b>插件</b>：已是最新（v").append(installed).append("）。<br>");
+            }
+        }
+
+        // dsh
+        if (dshLatest == null) {
+            sb.append("• <b>DeepSeek Harness (dsh)</b>：无法连接 npm 检查更新，请稍后重试。");
+        } else {
+            sb.append("• <b>DeepSeek Harness (dsh)</b>：最新 <b>v").append(dshLatest)
+                    .append("</b>。本插件用 <code>npx --yes</code> 启动服务器，下次启动会自动使用最新版。");
+        }
+        sb.append("</html>");
+
+        String title = hasUpdate ? "DeepSeek Harness Studio：有可用更新" : "DeepSeek Harness Studio：已是最新";
+        NotificationGroupManager.getInstance()
+                .getNotificationGroup(DshStudioConstants.NOTIFICATION_GROUP_ID)
+                .createNotification(title, sb.toString(),
+                        hasUpdate ? NotificationType.WARNING : NotificationType.INFORMATION)
+                .notify(null);
+    }
+
     @Override
     public boolean isModified() {
         DshSettingsState state = DshSettingsState.getInstance();
@@ -283,6 +399,11 @@ public final class DshSettingsConfigurable implements Configurable {
         themeCombo.setSelectedItem(DshUiTheme.fromId(state.uiTheme));
         testResultLabel.setText("");
         testResultLabel.setHorizontalAlignment(SwingConstants.LEFT);
+
+        pluginVersionLabel.setText(DshUtil.getInstalledPluginVersion());
+        dshVersionLabel.setText("查询中…");
+        dshVersionLabel.setForeground(JBColor.GRAY);
+        refreshDshVersion();
     }
 
     @Override

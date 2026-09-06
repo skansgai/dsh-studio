@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
+  <!-- 主六边形（纯色，避免渐变被市场 SVG 清洗器丢弃） -->
+  <path d="M20 3.5 L35.2 12.9 V27.1 L20 36.5 L4.8 27.1 V12.9 Z" fill="#4D6BFE"/>
+  <!-- 微高光描边 -->
+  <path d="M20 3.5 L35.2 12.9 V27.1 L20 36.5 L4.8 27.1 V12.9 Z" fill="none" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="0.7"/>
+
+  <!-- 鲸鱼尾（白色，底部居中） -->
+  <path d="M20 30.5
+           C 18 26, 14.5 24, 9.5 24.6
+           C 11.5 21.6, 15.5 21, 17.8 23.2
+           C 18.8 21.7, 21.2 21.7, 22.2 23.2
+           C 24.5 21, 28.5 21.6, 30.5 24.6
+           C 25.5 24, 22 26, 20 30.5 Z" fill="#FFFFFF"/>
+
+  <!-- 终端符号 >_（左上，浅蓝） -->
+  <path d="M10 12.5 L14.6 15.6 L10 18.7" fill="none" stroke="#AFC4FF" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M15.8 17.6 H19" fill="none" stroke="#AFC4FF" stroke-width="2.1" stroke-linecap="round"/>
+</svg>

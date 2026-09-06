@@ -2,14 +2,21 @@ package com.deepseek.dshstudio.util;
 
 import com.deepseek.dshstudio.DshStudioConstants;
 import com.deepseek.dshstudio.settings.DshSettingsState;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
+import com.intellij.ide.plugins.IdeaPluginDescriptor;
+import com.intellij.ide.plugins.PluginManagerCore;
+import com.intellij.openapi.extensions.PluginId;
 import com.intellij.openapi.project.Project;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.awt.Desktop;
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URI;
@@ -231,6 +238,110 @@ public final class DshUtil {
         }
     }
 
+    /**
+     * 查出占用某个 TCP 端口的进程 PID。
+     * <p>
+     * Windows 走 {@code netstat -ano}，其他平台优先 {@code lsof -ti}，退回到 {@code ss -ltnp}。
+     * 只在需要提示用户清理残留实例时调用，属于低频操作。
+     *
+     * @param port 端口号
+     * @return 监听该端口的 PID 列表（已去重）；查不到或命令失败时返回空列表
+     */
+    @NotNull
+    public static List<Long> findPortOwnerPids(int port) {
+        List<Long> pids = new ArrayList<>();
+        if (port <= 0) {
+            return pids;
+        }
+        try {
+            List<String> lines = new ArrayList<>();
+            if (isWindows()) {
+                lines = runAndRead("netstat", "-ano", "-p", "tcp");
+                String needle = ":" + port + " ";
+                for (String line : lines) {
+                    String trimmed = line.trim();
+                    if (!trimmed.toUpperCase(Locale.ROOT).contains("LISTENING")) {
+                        continue;
+                    }
+                    // 形如：TCP  127.0.0.1:3080  0.0.0.0:0  LISTENING  14052
+                    if (trimmed.indexOf(needle) < 0) {
+                        continue;
+                    }
+                    String[] cols = trimmed.split("\\s+");
+                    if (cols.length < 5) {
+                        continue;
+                    }
+                    addPid(pids, cols[cols.length - 1]);
+                }
+            } else {
+                lines = runAndRead("lsof", "-ti", "tcp:" + port);
+                for (String line : lines) {
+                    addPid(pids, line.trim());
+                }
+            }
+        } catch (Exception ignored) {
+            // 命令不存在 / 无权限：查不到就算了，不影响主流程
+        }
+        return pids;
+    }
+
+    /**
+     * 强制结束指定 PID 的进程（Windows 连带子进程树）。
+     *
+     * @return 是否成功发起了结束命令
+     */
+    public static boolean killPid(long pid) {
+        if (pid <= 0) {
+            return false;
+        }
+        try {
+            List<String> cmd = new ArrayList<>();
+            if (isWindows()) {
+                cmd.add("taskkill");
+                cmd.add("/PID");
+                cmd.add(String.valueOf(pid));
+                cmd.add("/T");
+                cmd.add("/F");
+            } else {
+                cmd.add("kill");
+                cmd.add("-9");
+                cmd.add(String.valueOf(pid));
+            }
+            Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+            p.waitFor(5, TimeUnit.SECONDS);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static void addPid(@NotNull List<Long> pids, @NotNull String raw) {
+        try {
+            long pid = Long.parseLong(raw.trim());
+            if (pid > 0 && !pids.contains(pid)) {
+                pids.add(pid);
+            }
+        } catch (NumberFormatException ignored) {
+            // 忽略非数字列
+        }
+    }
+
+    /** 执行一条外部命令并读取其标准输出（合并 stderr），失败时返回空列表。 */
+    @NotNull
+    private static List<String> runAndRead(@NotNull String... command) throws IOException, InterruptedException {
+        Process p = new ProcessBuilder(command).redirectErrorStream(true).start();
+        List<String> lines = new ArrayList<>();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                lines.add(line);
+            }
+        }
+        p.waitFor(10, TimeUnit.SECONDS);
+        return lines;
+    }
+
     // ── 浏览器 ────────────────────────────────────────────────────────────
 
     /**
@@ -340,5 +451,152 @@ public final class DshUtil {
             return hours + " 小时前";
         }
         return (hours / 24) + " 天前";
+    }
+
+    // ── 版本查询（关于页 / 检查更新）─────────────────────────────────────
+
+    /**
+     * 已安装插件版本（取自 plugin.xml，运行时读取）。
+     * 读取失败（极少数环境下 PluginManagerCore 不可用）回退为 "未知"。
+     */
+    @NotNull
+    public static String getInstalledPluginVersion() {
+        try {
+            IdeaPluginDescriptor descriptor =
+                    PluginManagerCore.getPlugin(PluginId.getId(DshStudioConstants.PLUGIN_ID));
+            if (descriptor != null && descriptor.getVersion() != null && !descriptor.getVersion().isEmpty()) {
+                return descriptor.getVersion();
+            }
+        } catch (Exception ignored) {
+            // 极少数环境下 PluginManagerCore 不可用，回退到 unknown
+        }
+        return "未知";
+    }
+
+    /**
+     * npm 上 {@code @deepseek-ai/dsh} 的最新版本（npx --yes 默认拉取的正是它）。
+     * 网络不可达或解析失败返回 null。
+     */
+    @Nullable
+    public static String fetchLatestDshVersion(int timeoutMs) {
+        String body = httpGetText("https://registry.npmjs.org/@deepseek-ai/dsh/latest", timeoutMs);
+        if (body == null) {
+            return null;
+        }
+        try {
+            JsonElement element = JsonParser.parseString(body);
+            if (element.isJsonObject()) {
+                JsonElement version = element.getAsJsonObject().get("version");
+                if (version != null && version.isJsonPrimitive()) {
+                    return version.getAsString();
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // 非 JSON 响应
+        }
+        return null;
+    }
+
+    /**
+     * JetBrains Marketplace 上本插件的最新版本（取 updates 列表首个条目）。
+     * 网络不可达或解析失败返回 null。
+     */
+    @Nullable
+    public static String fetchLatestPluginVersion(int timeoutMs) {
+        String body = httpGetText("https://plugins.jetbrains.com/api/plugins/33569/updates", timeoutMs);
+        if (body == null) {
+            return null;
+        }
+        try {
+            JsonElement element = JsonParser.parseString(body);
+            if (element.isJsonArray() && element.getAsJsonArray().size() > 0) {
+                JsonElement first = element.getAsJsonArray().get(0);
+                if (first.isJsonObject()) {
+                    JsonElement version = first.getAsJsonObject().get("version");
+                    if (version != null && version.isJsonPrimitive()) {
+                        return version.getAsString();
+                    }
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // 非 JSON 响应
+        }
+        return null;
+    }
+
+    /**
+     * 语义化版本比较：a&lt;b 返回负数，a==b 返回 0，a&gt;b 返回正数。
+     * 预发布 / 元数据后缀（如 -rc.1、+build）按数值部分比较，缺失段视为 0。
+     */
+    public static int compareVersion(@NotNull String a, @NotNull String b) {
+        String[] pa = a.split("\\.");
+        String[] pb = b.split("\\.");
+        int n = Math.max(pa.length, pb.length);
+        for (int i = 0; i < n; i++) {
+            int va = parseVersionPart(pa, i);
+            int vb = parseVersionPart(pb, i);
+            if (va != vb) {
+                return Integer.compare(va, vb);
+            }
+        }
+        return 0;
+    }
+
+    private static int parseVersionPart(@NotNull String[] parts, int index) {
+        if (index >= parts.length) {
+            return 0;
+        }
+        String numeric = parts[index].replaceAll("[^0-9].*$", "");
+        if (numeric.isEmpty()) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(numeric);
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
+    /** HTTP GET，返回响应体文本；非 2xx 或任何异常返回 null。 */
+    @Nullable
+    private static String httpGetText(String url, int timeoutMs) {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
+            connection.setConnectTimeout(timeoutMs);
+            connection.setReadTimeout(timeoutMs);
+            connection.setRequestMethod("GET");
+            connection.setInstanceFollowRedirects(true);
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("User-Agent", "DshStudio-UpdateCheck");
+            int code = connection.getResponseCode();
+            if (code < 200 || code >= 300) {
+                return null;
+            }
+            try (InputStream stream = connection.getInputStream()) {
+                return readAll(stream);
+            }
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private static String readAll(@Nullable InputStream stream) throws IOException {
+        if (stream == null) {
+            return "";
+        }
+        try (InputStream in = stream) {
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            byte[] chunk = new byte[8192];
+            int read;
+            while ((read = in.read(chunk)) > 0) {
+                buffer.write(chunk, 0, read);
+            }
+            return buffer.toString(StandardCharsets.UTF_8);
+        }
     }
 }

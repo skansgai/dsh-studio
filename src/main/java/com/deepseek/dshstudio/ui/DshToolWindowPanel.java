@@ -11,7 +11,9 @@ import com.deepseek.dshstudio.server.DshServerManager;
 import com.deepseek.dshstudio.server.DshServerManager.ServerState;
 import com.deepseek.dshstudio.server.DshServerTopics;
 import com.deepseek.dshstudio.settings.DshSettingsTopics;
+import com.deepseek.dshstudio.DshStudioConstants;
 import com.deepseek.dshstudio.util.DshUtil;
+import com.google.gson.Gson;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.actionSystem.ActionManager;
 import com.intellij.openapi.actionSystem.ActionToolbar;
@@ -51,6 +53,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Base64;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * 工具窗口主面板：
@@ -65,6 +69,9 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     private static final JBColor COLOR_WARN = new JBColor(0xB26B00, 0xE8B26A);
     private static final JBColor COLOR_ERROR = new JBColor(0xC5221F, 0xF28B82);
     private static final JBColor COLOR_IDLE = new JBColor(new Color(0x808080), new Color(0xA0A0A0));
+
+    /** 页面 ↔ 插件之间的 JSON 序列化（用于版本/检查更新回传）。 */
+    private static final Gson GSON = new Gson();
 
     /** 注入到 dsh 网页的「通用设置 + 背景浮层」脚本（来自 classpath 资源 /dsh/overlay.js）。 */
     private static final String OVERLAY_SCRIPT;
@@ -274,7 +281,7 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
 
         JPanel buttonRow = new JPanel(new FlowLayout(FlowLayout.CENTER));
         JButton openButton = new JButton("在系统浏览器中打开");
-        openButton.addActionListener(e -> DshUtil.openInBrowser(manager.getUrl()));
+        openButton.addActionListener(e -> DshUtil.openInBrowser(manager.browsableUrl()));
         buttonRow.add(openButton);
         panel.add(buttonRow, BorderLayout.SOUTH);
         return panel;
@@ -323,12 +330,13 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     /**
      * 内嵌浏览器要加载的地址。
      * <p>
-     * dsh 0.1.1-rc.2 的访问控制是 Host 头信任围栏（防 DNS rebinding），
-     * 既没有 token 也没有 Cookie：从 127.0.0.1 / localhost 发起的请求直接放行，
-     * 所以这里不需要拼任何凭证。
+     * dsh 从 0.1.2-rc.1 起增加了 launch token 鉴权：不带 <code>?token=</code> 访问首页会被拒绝，
+     * 只返回 <code>dsh web authentication required</code>。所以这里用
+     * {@link DshServerManager#browsableUrl()} 把捕获到的 token 拼上去；
+     * token 变化后 {@link #loadUrlOnce()} 会因为地址不同而自动重新加载。
      */
     public String browserUrl() {
-        return manager.getUrl();
+        return manager.browsableUrl();
     }
 
     /**
@@ -388,7 +396,10 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
         // 插件端是权威存储，每次注入都让页面按权威值恢复一次，之后 2s 轮询不再覆盖页面内的改动。
         String restoreLine = "window.__dshRestore={bg:\"" + escapeJs(bg == null ? "" : bg)
                 + "\",opacity:" + opacity + "};window.__dshRestoreApplied=false;";
-        String script = OVERLAY_SCRIPT.replace("/*SEED*/", restoreLine);
+        // 插件版本同时注入，供 dsh 网页「关于」区块立即显示（dsh 最新版由页面发 cmd:version 异步拉取）。
+        String infoLine = "window.__dshStudioInfo={pluginVersion:\""
+                + escapeJs(DshUtil.getInstalledPluginVersion()) + "\"};";
+        String script = OVERLAY_SCRIPT.replace("/*SEED*/", restoreLine + infoLine);
         DshJcefSupport.executeJavaScript(browser, script);
     }
 
@@ -400,6 +411,16 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
      * 只在非空时才写，否则刷新后旧图会被重新注入回来。</p>
      */
     private void onPageSync(@NotNull String json) {
+        // 命令类消息（版本查询 / 检查更新）：与背景图回传走同一通道，用 cmd 字段区分
+        String cmd = extractJsonString(json, "cmd");
+        if (cmd != null && !cmd.isEmpty()) {
+            if ("version".equals(cmd)) {
+                requestVersions();
+            } else if ("checkUpdate".equals(cmd)) {
+                checkForUpdatesFromPage();
+            }
+            return;
+        }
         final String bg = extractJsonString(json, "bg"); // null = 本次未带该字段
         final double op = extractJsonNumber(json, "op"); // -1 = 本次未带该字段
         if (bg == null && op < 0) {
@@ -424,6 +445,50 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
                 s.backgroundImageOpacity = Math.max(0.0, Math.min(1.0, op / 100.0));
             }
             applyBackgroundImages(); // 同步 IDE 状态栏 / 空白页背景
+        });
+    }
+
+    /**
+     * 响应 dsh 网页「关于」区块的版本查询：抓取 npm 上 dsh 最新版，连同插件版本回传页面。
+     * 网络 IO 必须在线程池，回传用 {@link DshJcefSupport#executeJavaScript} 注入页面全局函数。
+     */
+    private void requestVersions() {
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            String pluginVersion = DshUtil.getInstalledPluginVersion();
+            String dshLatest = DshUtil.fetchLatestDshVersion(DshStudioConstants.API_TIMEOUT_MS);
+            Map<String, String> payload = new HashMap<>();
+            payload.put("pluginVersion", pluginVersion);
+            payload.put("dshLatest", dshLatest);
+            String js = "window.__dshStudioVersion&&window.__dshStudioVersion(" + GSON.toJson(payload) + ");";
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (!disposed && browser != null) {
+                    DshJcefSupport.executeJavaScript(browser, js);
+                }
+            });
+        });
+    }
+
+    /**
+     * 响应 dsh 网页「关于」区块的「检查更新」：比对插件（Marketplace）与 dsh（npm）最新版本，
+     * 把结果回传页面渲染。
+     */
+    private void checkForUpdatesFromPage() {
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            String installed = DshUtil.getInstalledPluginVersion();
+            String pluginLatest = DshUtil.fetchLatestPluginVersion(DshStudioConstants.API_TIMEOUT_MS);
+            String dshLatest = DshUtil.fetchLatestDshVersion(DshStudioConstants.API_TIMEOUT_MS);
+            boolean hasPluginUpdate = pluginLatest != null && DshUtil.compareVersion(installed, pluginLatest) < 0;
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("installed", installed);
+            payload.put("pluginLatest", pluginLatest);
+            payload.put("dshLatest", dshLatest);
+            payload.put("hasPluginUpdate", hasPluginUpdate);
+            String js = "window.__dshStudioUpdate&&window.__dshStudioUpdate(" + GSON.toJson(payload) + ");";
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (!disposed && browser != null) {
+                    DshJcefSupport.executeJavaScript(browser, js);
+                }
+            });
         });
     }
 

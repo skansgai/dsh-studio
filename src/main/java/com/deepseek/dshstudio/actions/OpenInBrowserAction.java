@@ -44,6 +44,6 @@ public final class OpenInBrowserAction extends AnAction {
             return;
         }
         DshServerManager manager = DshServerManager.getInstance(project);
-        DshUtil.openInBrowser(manager.getUrl());
+        DshUtil.openInBrowser(manager.browsableUrl());
     }
 }

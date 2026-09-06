@@ -3,8 +3,11 @@ package com.deepseek.dshstudio.server;
 import com.deepseek.dshstudio.DshStudioConstants;
 import com.deepseek.dshstudio.settings.DshSettingsState;
 import com.deepseek.dshstudio.util.DshUtil;
+import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationAction;
 import com.intellij.notification.NotificationGroupManager;
 import com.intellij.notification.NotificationType;
+import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
 import org.jetbrains.annotations.NotNull;
@@ -14,6 +17,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
@@ -51,6 +55,8 @@ public final class DshServerManager {
     /** dsh 启动输出中捕获的浏览器鉴权 token（形如 ?token=xxx），供 DshApiClient 交换 Cookie。 */
     @Nullable
     private volatile String launchToken;
+    /** 本次"复用外部实例"是否已经提示过（避免每次探测都弹一次）。 */
+    private volatile boolean staleWarned;
 
     private DshServerManager(@NotNull Project project) {
         this.project = project;
@@ -88,6 +94,28 @@ public final class DshServerManager {
         return launchToken;
     }
 
+    /**
+     * 供浏览器（内嵌 / 系统）打开的地址：在服务器地址上拼上 launch token。
+     * <p>
+     * dsh 从 0.1.2-rc.1 起增加了 launch token 鉴权 —— 不带 <code>?token=</code> 直接访问首页会被拒绝，
+     * 只返回 <code>dsh web authentication required; reopen the URL printed by dsh web.</code>。
+     * 带上 token 访问一次后服务端会下发 Cookie，之后同域请求自动放行。
+     * <p>
+     * 只有本插件拉起的进程才捕获得到 token（从它的启动输出里）。复用外部实例时 token 为 null，
+     * 此时原样返回地址，调用方需要提示用户去原终端复制带 token 的地址。
+     *
+     * @return 带 token 的地址；无可用 token、或地址里已经带了 token 时原样返回
+     */
+    @NotNull
+    public String browsableUrl() {
+        String url = getUrl();
+        String token = launchToken;
+        if (token == null || token.isEmpty() || url.contains("token=")) {
+            return url;
+        }
+        return url + (url.indexOf('?') >= 0 ? '&' : '?') + "token=" + token;
+    }
+
     // ── 启动 / 停止 ────────────────────────────────────────────────────────
 
     /**
@@ -99,6 +127,11 @@ public final class DshServerManager {
             if (reachable) {
                 startAttempted = false;
                 setState(ServerState.RUNNING);
+                // 端口上已有服务但进程不由本插件管理：很可能是上次会话 / 升级前残留的旧实例，
+                // 直接复用会让用户拿到一个坏掉的实例，所以提示并给出一键清理。
+                if (!isManagedProcessAlive()) {
+                    warnStaleInstance();
+                }
                 return;
             }
             if (isManagedProcessAlive()) {
@@ -208,6 +241,92 @@ public final class DshServerManager {
     }
 
     /**
+     * 当前连接地址里的端口号（用于定位占用端口的进程）；解析不出时返回 -1。
+     */
+    private int currentPort() {
+        try {
+            int port = URI.create(getUrl()).getPort();
+            return port > 0 ? port : 80;
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    /**
+     * 端口上已有服务，但进程不是本插件拉起的 —— 提示可能复用了残留实例，并提供一键清理。
+     * <p>
+     * 典型场景：{@code npx --yes} 会把 dsh 静默升级到最新版，而在此之前启动的 dsh 进程仍在跑。
+     * 旧进程继续按旧结构产出 boot manifest，却从磁盘上已升级的包里读取新的 client bundle，
+     * 页面就会报 {@code client-modules: boot manifest batches must be an array} 之类的错误。
+     * 只有结束那个旧进程、重新拉起才能恢复。
+     */
+    private void warnStaleInstance() {
+        if (staleWarned) {
+            return;
+        }
+        int port = currentPort();
+        if (port <= 0) {
+            return;
+        }
+        List<Long> pids = DshUtil.findPortOwnerPids(port);
+        if (pids.isEmpty()) {
+            return; // 拿不到 PID 就没有可执行的清理动作，别打扰用户
+        }
+        staleWarned = true;
+
+        String who = "端口 " + port + "（PID " + pids + "）";
+        appendLog("[dsh] 检测到 " + who + " 上已有一个 dsh 服务在运行，但它不是本插件启动的，本次将直接复用。\n"
+                + "[dsh] 如果页面报 client-modules 相关错误，它多半是升级前的残留实例：结束它之后重新启动即可。\n");
+        if (launchToken == null) {
+            appendLog("[dsh] 注意：这个实例不是本插件启动的，拿不到它的 launch token。\n"
+                    + "[dsh] dsh 0.1.2-rc.1 起首页需要 ?token= 鉴权，直接打开会提示 "
+                    + "\"dsh web authentication required\"。\n"
+                    + "[dsh] 解决办法二选一：① 结束它、让本插件重新启动；"
+                    + "② 在启动它的终端里复制 dsh 打印的带 token 的地址，填到 设置 → 服务器地址。\n");
+        }
+
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (project.isDisposed()) {
+                return;
+            }
+            Notification notification = NotificationGroupManager.getInstance()
+                    .getNotificationGroup(DshStudioConstants.NOTIFICATION_GROUP_ID)
+                    .createNotification("正在复用已有的 dsh 服务",
+                            who + " 上已有一个 dsh 服务在运行，但<b>不是本插件启动的</b>。<br>"
+                                    + "如果页面报错（例如 <code>client-modules</code> 相关错误），它很可能是 "
+                                    + "<b>npx 升级前残留的旧实例</b>——结束它后重新启动即可恢复正常。"
+                                    + (launchToken == null
+                                    ? "<br>另外它不在本插件管理下，拿不到 launch token，"
+                                    + "页面会提示 <code>dsh web authentication required</code>；"
+                                    + "请在启动它的终端复制带 <code>?token=</code> 的地址，"
+                                    + "或结束它让本插件重新启动。"
+                                    : ""),
+                            NotificationType.WARNING);
+            notification.addAction(new NotificationAction("结束占用进程并重启") {
+                @Override
+                public void actionPerformed(@NotNull AnActionEvent e, @NotNull Notification n) {
+                    n.expire();
+                    ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                        for (Long pid : pids) {
+                            DshUtil.killPid(pid);
+                        }
+                        appendLog("[dsh] 已结束占用进程 " + pids + "\n");
+                        try {
+                            Thread.sleep(1200);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                        }
+                        staleWarned = false;
+                        probe();
+                        startServer();
+                    });
+                }
+            });
+            notification.notify(project);
+        });
+    }
+
+    /**
      * 停止由本插件启动的服务器进程（含子进程树）。
      */
     public void stopServer() {
@@ -269,6 +388,9 @@ public final class DshServerManager {
     public void probe() {
         boolean up = DshUtil.isReachable(getUrl(), DshStudioConstants.HEALTH_TIMEOUT_MS);
         reachable = up;
+        if (!up) {
+            staleWarned = false; // 服务没了，下次再复用外部实例时重新提示
+        }
         ServerState next;
         if (up) {
             next = ServerState.RUNNING;
