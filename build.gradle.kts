@@ -96,21 +96,15 @@ intellijPlatform {
         changeNotes = """
             <h3>0.3.3</h3>
             <ul>
-              <li><b>修复「关于」页打开后原内容区漏出成窄列</b>：dsh 周期性重绘设置对话框时只换内容节点、旧节点只是被移到别处（仍 isConnected），
-                  旧代码用缓存的内容引用去 hide 会命中不到真正可见的新内容区，新内容就会作为 flex 兄弟被压成 min-content 的"窄列"漏出来。
-                  现在 applyAbout 改用"about 面板的兄弟节点"重新解析当前内容区，结构查找不依赖 offsetWidth，对隐藏/可见都生效。</li>
-            </ul>
-            <h3>0.3.2</h3>
-            <ul>
-              <li><b>修复「关于」页 dsh 版本号过一会儿就消失</b>：dsh 会周期性重绘设置对话框并冲掉克隆的「关于」卡片，重建的卡片默认回退成「查询中…」。
-                  现在插件端回传的版本/更新结论会缓存，卡片一旦被重建立即从缓存回填，版本号不再闪没。</li>
+              <li><b>移除 dsh 网页「设置」里注入的「关于」标签页</b>：该面板是靠克隆 dsh 原生导航节点硬造出来的，
+                  dsh 每次重绘设置对话框都会把它冲掉，导致「版本号过一会儿就消失」「打开关于页后原内容区漏出成窄列」等反复出现的问题，
+                  属于结构性缺陷、无法稳定修好。IDE 设置页（Settings → Tools → DeepSeek Harness）本来就有完整的「关于」区块
+                  （插件版本 + dsh 版本 + 检查更新），功能不缺失，因此直接移除这段注入。dsh 网页侧仍保留「通用设置」里的背景图 / 不透明度卡片。</li>
             </ul>
             <h3>0.3.1</h3>
             <ul>
               <li><b>修复市场/IDE 中插件图标不显示</b>：将 <code>pluginIcon.svg</code> 从 JAR 根目录移到规范的 <code>META-INF/</code> 位置，并改为 40×40、无渐变（纯色）的扁平写法，规避市场 SVG 清洗器对 <code>&lt;defs&gt;</code>/渐变与 <code>width/height=240</code> 的丢弃，确保图标正常渲染。</li>
               <li><b>设置页新增「关于」区块</b>：显示插件版本与 DeepSeek Harness (dsh) 的 npm 最新版本，并提供「检查更新」按钮，一键比对插件（Marketplace）与 dsh（npm）是否有新版本并给出升级指引。</li>
-              <li><b>dsh 网页「设置」新增「关于」标签页</b>：dsh 本身没有「关于」面板，本插件会在其设置左侧导航末尾克隆出一个「关于」条目，
-                  点进去显示插件版本、dsh（npm）版本与「检查更新」按钮；导航被 dsh 重绘冲掉时会自动补挂。</li>
               <li><b>提示并一键清理残留的旧 dsh 实例</b>：<code>npx --yes</code> 会把 dsh 静默升级，升级前启动的进程却仍在跑，
                   它会继续按旧结构产出 boot manifest 并从已升级的包里读取新 bundle，页面会报
                   <code>client-modules: boot manifest batches must be an array</code>。现在启动若发现端口被非本插件的实例占用，
