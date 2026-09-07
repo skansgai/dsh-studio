@@ -243,6 +243,28 @@
   var ABOUT_PANEL = 'about-panel';
   var aboutState = { nav: null, item: null, panel: null, content: null, dimmed: null, active: false };
 
+  // 跨 dsh 重绘缓存：dsh 会周期性重绘设置对话框并冲掉克隆的关于卡片，
+  // 重建的卡片默认显示「查询中…」。把插件端回传的版本/更新结果缓存下来，
+  // 一旦卡片被重建就从缓存里回填，避免版本号「过一会儿就消失」。
+  var aboutVersionInfo = null;
+  var aboutUpdateInfo = null;
+
+  function applyVersionToCards(card) {
+    if (!card) return;
+    var dv = card.querySelector('[data-dsh="dv"]');
+    if (dv && aboutVersionInfo) {
+      dv.textContent = aboutVersionInfo.dshLatest
+        ? (aboutVersionInfo.dshLatest + '（npm 最新版）')
+        : '（无法获取）';
+    }
+    var pv = card.querySelector('[data-dsh="pv"]');
+    if (pv && aboutVersionInfo && aboutVersionInfo.pluginVersion) {
+      pv.textContent = aboutVersionInfo.pluginVersion;
+    }
+    var box = card.querySelector('[data-dsh="result"]');
+    if (box && aboutUpdateInfo) applyUpdateToBox(box, aboutUpdateInfo);
+  }
+
   function leavesWithExactText(root, texts) {
     var all = root.querySelectorAll('*');
     var out = [];
@@ -507,6 +529,9 @@
 
     // 请求 dsh 最新版本（插件版本已由注入种子给出）
     try { console.log(SYNC_PREFIX + JSON.stringify({ cmd: 'version' })); } catch (e) { /* 忽略 */ }
+
+    // 若此前已回传过版本/更新结果，立即从缓存回填，避免重建后显示「查询中…」又消失。
+    applyVersionToCards(card);
   }
 
   function updateAboutTheme(card) {
@@ -518,26 +543,8 @@
     if (btn) { btn.style.background = c.btn; btn.style.color = c.btnFg; btn.style.borderColor = c.border; }
   }
 
-  // 插件端回传：版本信息（cmd=version 的响应）
-  window.__dshStudioVersion = function (info) {
-    var card = document.querySelector('[data-dshstudio="about"]');
-    if (!card || !info) return;
-    if (info.pluginVersion) {
-      var pv = card.querySelector('[data-dsh="pv"]');
-      if (pv) pv.textContent = info.pluginVersion;
-    }
-    var dv = card.querySelector('[data-dsh="dv"]');
-    if (dv) {
-      dv.textContent = info.dshLatest ? (info.dshLatest + '（npm 最新版）') : '（无法获取）';
-    }
-  };
-
-  // 插件端回传：检查更新结果（cmd=checkUpdate 的响应）
-  window.__dshStudioUpdate = function (res) {
-    var card = document.querySelector('[data-dshstudio="about"]');
-    if (!card || !res) return;
-    var box = card.querySelector('[data-dsh="result"]');
-    if (!box) return;
+  function applyUpdateToBox(box, res) {
+    if (!box || !res) return;
     if (res.hasPluginUpdate) {
       box.style.color = '#e8a33d';
       box.innerHTML = '插件有新版 <b>v' + esc(res.pluginLatest) + '</b>（当前 v' + esc(res.installed)
@@ -547,6 +554,29 @@
       var dsh = res.dshLatest ? (' DeepSeek Harness 最新 v' + esc(res.dshLatest) + '（npx 下次启动自动使用）。') : '';
       box.innerHTML = '插件已是最新（v' + esc(res.installed) + '）。' + dsh;
     }
+  }
+
+  function applyAllAboutCards(fn) {
+    var cards = document.querySelectorAll('[data-dshstudio="about"]');
+    for (var i = 0; i < cards.length; i++) fn(cards[i]);
+  }
+
+  // 插件端回传：版本信息（cmd=version 的响应）。
+  // 缓存 + 应用到所有卡片：dsh 重绘会重建卡片，重建后必须能从缓存回填，否则版本号会「消失」。
+  window.__dshStudioVersion = function (info) {
+    if (!info) return;
+    aboutVersionInfo = info;
+    applyAllAboutCards(function (card) { applyVersionToCards(card); });
+  };
+
+  // 插件端回传：检查更新结果（cmd=checkUpdate 的响应）。同样缓存 + 应用到所有卡片。
+  window.__dshStudioUpdate = function (res) {
+    if (!res) return;
+    aboutUpdateInfo = res;
+    applyAllAboutCards(function (card) {
+      var box = card.querySelector('[data-dsh="result"]');
+      applyUpdateToBox(box, res);
+    });
   };
 
   function esc(s) {

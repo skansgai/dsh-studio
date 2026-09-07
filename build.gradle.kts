@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.3.1"
+version = "0.3.2"
 
 repositories {
     mavenCentral()
@@ -94,6 +94,11 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
+            <h3>0.3.2</h3>
+            <ul>
+              <li><b>修复「关于」页 dsh 版本号过一会儿就消失</b>：dsh 会周期性重绘设置对话框并冲掉克隆的「关于」卡片，重建的卡片默认回退成「查询中…」。
+                  现在插件端回传的版本/更新结论会缓存，卡片一旦被重建立即从缓存回填，版本号不再闪没。</li>
+            </ul>
             <h3>0.3.1</h3>
             <ul>
               <li><b>修复市场/IDE 中插件图标不显示</b>：将 <code>pluginIcon.svg</code> 从 JAR 根目录移到规范的 <code>META-INF/</code> 位置，并改为 40×40、无渐变（纯色）的扁平写法，规避市场 SVG 清洗器对 <code>&lt;defs&gt;</code>/渐变与 <code>width/height=240</code> 的丢弃，确保图标正常渲染。</li>
