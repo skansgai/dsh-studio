@@ -380,13 +380,28 @@
   // 这样"关于"页和其它菜单之间才真正互斥、且不闪退。
   function applyAbout() {
     var s = aboutState;
-    if (!s.item || !s.panel || !s.content) return;
+    if (!s.item || !s.panel) return;
+    // 重新解析当前内容区：不要信任缓存的 s.content。dsh 重绘时可能把 content 整个换掉或移走，
+    // 旧引用 hide 命中不到真正可见的 content，新 content 就会作为 flex 兄弟被压成 min-content
+    // 的"窄列"漏出来。用 about 面板的兄弟节点定位 content（结构查找，不依赖 offsetWidth，
+    // 因为 content 隐藏时 offsetWidth=0 会让 findContentArea 失效）。
+    if (s.panel.parentElement) {
+      var parent = s.panel.parentElement;
+      for (var k = 0; k < parent.children.length; k++) {
+        var sib = parent.children[k];
+        if (sib === s.panel) continue;
+        if (sib === s.nav) continue;
+        if (sib.getAttribute && sib.getAttribute('data-dshstudio') === ABOUT_NAV) continue;
+        s.content = sib;
+        break;
+      }
+    }
     if (s.active) {
-      s.content.style.setProperty('display', 'none', 'important');
+      if (s.content) s.content.style.setProperty('display', 'none', 'important');
       s.panel.style.setProperty('display', 'block', 'important');
       markAboutActive(true);
     } else {
-      s.content.style.removeProperty('display');
+      if (s.content) s.content.style.removeProperty('display');
       s.panel.style.setProperty('display', 'none', 'important');
       markAboutActive(false);
     }

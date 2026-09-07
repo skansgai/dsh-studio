@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.3.2"
+version = "0.3.3"
 
 repositories {
     mavenCentral()
@@ -94,6 +94,12 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
+            <h3>0.3.3</h3>
+            <ul>
+              <li><b>修复「关于」页打开后原内容区漏出成窄列</b>：dsh 周期性重绘设置对话框时只换内容节点、旧节点只是被移到别处（仍 isConnected），
+                  旧代码用缓存的内容引用去 hide 会命中不到真正可见的新内容区，新内容就会作为 flex 兄弟被压成 min-content 的"窄列"漏出来。
+                  现在 applyAbout 改用"about 面板的兄弟节点"重新解析当前内容区，结构查找不依赖 offsetWidth，对隐藏/可见都生效。</li>
+            </ul>
             <h3>0.3.2</h3>
             <ul>
               <li><b>修复「关于」页 dsh 版本号过一会儿就消失</b>：dsh 会周期性重绘设置对话框并冲掉克隆的「关于」卡片，重建的卡片默认回退成「查询中…」。
