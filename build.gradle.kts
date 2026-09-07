@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.3.3"
+version = "0.3.1"
 
 repositories {
     mavenCentral()
@@ -94,13 +94,6 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
-            <h3>0.3.3</h3>
-            <ul>
-              <li><b>移除 dsh 网页「设置」里注入的「关于」标签页</b>：该面板是靠克隆 dsh 原生导航节点硬造出来的，
-                  dsh 每次重绘设置对话框都会把它冲掉，导致「版本号过一会儿就消失」「打开关于页后原内容区漏出成窄列」等反复出现的问题，
-                  属于结构性缺陷、无法稳定修好。IDE 设置页（Settings → Tools → DeepSeek Harness）本来就有完整的「关于」区块
-                  （插件版本 + dsh 版本 + 检查更新），功能不缺失，因此直接移除这段注入。dsh 网页侧仍保留「通用设置」里的背景图 / 不透明度卡片。</li>
-            </ul>
             <h3>0.3.1</h3>
             <ul>
               <li><b>修复市场/IDE 中插件图标不显示</b>：将 <code>pluginIcon.svg</code> 从 JAR 根目录移到规范的 <code>META-INF/</code> 位置，并改为 40×40、无渐变（纯色）的扁平写法，规避市场 SVG 清洗器对 <code>&lt;defs&gt;</code>/渐变与 <code>width/height=240</code> 的丢弃，确保图标正常渲染。</li>
