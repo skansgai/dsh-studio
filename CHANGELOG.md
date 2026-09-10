@@ -2,6 +2,30 @@
 
 本文件记录 DeepSeek Harness Studio 的版本变更。英文条目对应中文说明，保持双语一致。
 
+## 0.3.1（2026-09-10）
+
+### 修复 / Fixes
+- **适配 dsh 0.1.2-rc.1 的启动令牌鉴权**：新版 dsh 的首页必须带 `?token=` 才能打开，直接访问会被拒绝
+  （401 `dsh web authentication required`）。插件现在会从自己拉起的 dsh 进程输出里自动捕获 token 并拼到访问地址上；
+  若复用的是外部已在运行的实例（拿不到 token），会明确提示，并引导你从启动它的终端复制带 token 的地址
+  填进「设置 → 服务器地址」。
+- **市场/IDE 中插件图标不显示**：将 `pluginIcon.svg` 从 JAR 根目录移到规范的 `META-INF/` 位置，并改为 40×40、
+  无渐变（纯色）的扁平写法，规避市场 SVG 清洗器对 `<defs>`/渐变与 `width/height=240` 的丢弃。
+- **残留的旧 dsh 实例导致页面报错**：`npx --yes @deepseek-ai/dsh` 会静默升级，升级前启动的进程却仍在跑，
+  它继续按旧结构产出 boot manifest、却从已升级的包里读新 bundle，页面报
+  `client-modules: boot manifest batches must be an array`。现在启动若发现端口被非本插件的实例占用，
+  会给出提示并提供「结束占用进程并重启」。
+
+### 新增功能 / New features
+- **设置页新增「关于」区块**：显示插件版本与 DeepSeek Harness (dsh) 的 npm 最新版本，并提供「检查更新」按钮，
+  一键比对插件（JetBrains Marketplace）与 dsh（npm）是否有新版本并给出升级指引。
+  （注：版本信息仅在 IDE 设置页 Settings → Tools → DeepSeek Harness 中提供。）
+
+### 说明 / Notes
+- 0.3.2 / 0.3.3 只存在于本地 git，从未发布；发布版本号直接沿用 0.3.1。
+
+---
+
 ## 0.3.0（2026-08-31）
 
 ### 新增功能 / New features
