@@ -1,4 +1,20 @@
+import groovy.json.JsonSlurper
+import java.io.BufferedInputStream
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
+import java.security.MessageDigest
+import java.time.Duration
+import java.util.Base64
 import java.util.Properties
+import java.util.zip.GZIPInputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import javax.inject.Inject
+import org.gradle.process.ExecOperations
 
 plugins {
     java
@@ -249,5 +265,848 @@ tasks {
     // 不声明的话一条命令同时跑两个任务会直接失败。
     named("verifyPluginSignature") {
         dependsOn("signPlugin")
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 内置 dsh 运行时（bundleDshRuntime）
+// ════════════════════════════════════════════════════════════════════════════
+//
+// 为什么：现在首次启动靠 `npx --yes @deepseek-ai/dsh` 现拉，实测要下约 284 MB、
+// 耗时十几分钟，试用转化基本被吃掉。竞品 33555 内置运行时（40.7 MB）后体验是「秒开」。
+//
+// 实测（2026-09-11）：dsh 依赖闭包 457 个包 / 210.7 MB，压缩 54.6 MB；
+// 裁掉 sourcemap、`.d.ts`、文档、测试后压到 35.5 MB —— 与竞品基本持平，
+// 远低于 Marketplace 400 MB 上限。详见 docs/design-bundled-runtime.md。
+//
+// 产物：build/dsh-runtime/dsh-runtime.zip，被打进 JAR 的 dsh-runtime/ 下，
+//       插件首次运行时解包到用户目录使用（Java 侧在后续里程碑实现）。
+//
+// 可选配置（gradle.properties 或 -P）：
+//   dsh.runtime.version   内置的 dsh 版本，默认见下方（与插件版本解耦）
+//   dsh.runtime.targets   目标平台，逗号分隔，默认覆盖 5 个主流平台
+//   dsh.runtime.node      node 可执行文件，默认 PATH 里的 node
+//   dsh.runtime.npm       npm 可执行文件，默认 PATH 里的 npm
+//   dsh.runtime.skip      true 则跳过打包（产物里不带内置运行时）
+
+/**
+ * 把 dsh 运行时按平台解析、合并、裁剪、校验后打成一个 zip。
+ *
+ * 流程分三步：
+ *  1. 在构建机上跑**一次** `npm install`（宿主平台），拿到纯 JS 依赖树 + lockfile；
+ *  2. 从 lockfile 里读出其余目标平台的「平台专有包」，按 tarball 地址定点抓取解包，
+ *     拼成一棵含全部目标平台原生模块的树，保证一个包在 Windows/macOS/Linux 都能用；
+ *  3. 裁剪、两级自检、平台完整性校验后打包。
+ *
+ * 安装一律带 `--ignore-scripts`，原因见 [resolveTarget] 的注释。
+ */
+abstract class BundleDshRuntimeTask : DefaultTask() {
+
+    @get:Input
+    abstract val dshVersion: Property<String>
+
+    /** 目标平台，形如 `win32-x64`。 */
+    @get:Input
+    abstract val targets: ListProperty<String>
+
+    /** npm 启动命令（可能含参数，如 Windows 上的 `cmd /c npm`）。 */
+    @get:Input
+    abstract val npmCommand: ListProperty<String>
+
+    @get:Input
+    abstract val nodeExecutable: Property<String>
+
+    /** true 时忽略已有的解析结果，强制重新解析依赖。 */
+    @get:Input
+    abstract val forceRefresh: Property<Boolean>
+
+    /**
+     * sharp（图片处理）的打包方式：
+     *  - `native`：各平台原生二进制 + libvips，最快最省内存，但 5 个平台合计约 40 MB；
+     *  - `wasm`  ：只带 WASM 版（约 3.4 MB），体积小一个量级，代价是慢 1.5~2 倍、大图内存高；
+     *  - `hybrid`：仅 Windows 带原生版，其余平台走 WASM。
+     */
+    @get:Input
+    abstract val sharpMode: Property<String>
+
+    @get:Internal
+    abstract val workDir: DirectoryProperty
+
+    @get:OutputFile
+    abstract val outputZip: RegularFileProperty
+
+    @get:Inject
+    abstract val execOps: ExecOperations
+
+    /** 运行时用不到的目录（实测裁掉可省约 19 MB 压缩体积）。 */
+    private val prunableDirs = setOf(
+        "test", "tests", "__tests__", "spec", "specs",
+        "examples", "example", "docs", "doc"
+    )
+
+    /** 运行时用不到的文件后缀（`pdb` 是调试符号，单个文件能有好几 MB）。 */
+    private val prunableExtensions = setOf("map", "md", "markdown", "pdb")
+
+    /** 这些文件虽然后缀在裁剪列表里，但要保留（合规/说明）。 */
+    private val keepFileNames = setOf("license", "licence", "notice", "copying")
+
+    /**
+     * 整个包都不打包的清单（按 `@scope/name` 匹配，`*` 为通配），随 [sharpMode] 变化。
+     *
+     *  - **musl 变体**（约 15.5 MB）：JetBrains IDE 本身就不支持 musl / Alpine，
+     *    用户机器上永远用不到 `linuxmusl-*`；
+     *  - **WASM 兜底**（约 3.4 MB）：只有在该平台没有原生二进制时 sharp 才会退回 WASM；
+     *  - **原生 sharp + libvips**（5 个平台约 40 MB）：`sharpMode=wasm` 时全部换成
+     *    单个 `@img/sharp-wasm32`，体积小一个量级。
+     */
+    private val excludedPackages: List<String>
+        get() = buildList {
+            add("@img/sharp-freebsd-*")         // 不发布的平台
+            add("@img/sharp-webcontainers-*")   // WebContainer 专用，跟 IDE 无关
+            when (sharpMode.get().lowercase()) {
+                "wasm" -> {
+                    add("@img/sharp-libvips-*")
+                    add("@img/sharp-darwin-*")
+                    add("@img/sharp-linux*")    // 同时覆盖 linuxmusl-*
+                    add("@img/sharp-win32-*")
+                }
+                "hybrid" -> {
+                    // Windows 用原生，其余平台交给 WASM
+                    add("@img/sharp-libvips-*")
+                    add("@img/sharp-darwin-*")
+                    add("@img/sharp-linux*")
+                }
+                else -> {
+                    // native：5 个平台都有原生包，WASM 兜底轮不到；musl 也不支持
+                    add("@img/sharp-wasm32")
+                    add("@img/sharp-libvips-linuxmusl-*")
+                    add("@img/sharp-linuxmusl-*")
+                }
+            }
+        }
+
+    /**
+     * 与平台无关、但必须存在的包，随 [sharpMode] 变化。
+     *
+     * 裁剪是就地删文件，所以从 `native` 切到 `wasm` 后需要把 WASM 版 sharp 找回来。
+     * 这类包不带 os/cpu 约束，[fetchPlatformPackages] 覆盖不到，由 [ensurePackages] 单独补。
+     */
+    private val extraPackages: List<String>
+        get() = when (sharpMode.get().lowercase()) {
+            "wasm", "hybrid" -> listOf("@img/sharp-wasm32", "@emnapi/runtime")
+            else -> emptyList()
+        }
+
+    /** 每个目标平台必须齐全的原生包；内层多个候选表示「满足其一即可」。 */
+    private fun requiredNatives(osName: String): List<List<String>> = buildList {
+        add(listOf("@koromix/koffi-%s-%s"))          // FFI，dsh-subprocess-local 依赖
+        add(listOf("@vscode/ripgrep-%s-%s"))         // 内置 ripgrep
+        when (sharpMode.get().lowercase()) {
+            "wasm" -> add(listOf("@img/sharp-wasm32"))
+            "hybrid" -> if (osName == "win32") {
+                add(listOf("@img/sharp-%s-%s"))
+            } else {
+                add(listOf("@img/sharp-wasm32"))
+            }
+            else -> {
+                add(listOf("@img/sharp-%s-%s"))      // 图片处理，dsh-attachment-local 依赖
+                // libvips 只有 darwin/linux 拆成独立包，且分 glibc / musl 两种变体
+                if (osName != "win32") {
+                    add(listOf("@img/sharp-libvips-%s-%s", "@img/sharp-libvips-%smusl-%s"))
+                }
+            }
+        }
+    }
+
+    companion object {
+        /** 某个平台解析成功后写下的标记；内容含版本与参数指纹，参数一变即失效。 */
+        private const val MARKER_FILE = ".dsh-runtime-install-ok"
+
+        /** 记录哪些文件需要可执行位；解包后由插件统一 chmod。 */
+        private const val EXEC_MANIFEST = ".dsh-runtime-executables"
+
+        /**
+         * 构建机自身的平台标识，形如 `win32-x64`。
+         *
+         * 只有这个平台的二进制能在构建机上真正跑起来，所以它必须作为基底并被自检覆盖。
+         */
+        fun hostTarget(): String {
+            val os = System.getProperty("os.name").lowercase()
+            val arch = System.getProperty("os.arch").lowercase()
+            val osName = when {
+                os.contains("win") -> "win32"
+                os.contains("mac") || os.contains("darwin") -> "darwin"
+                else -> "linux"
+            }
+            val cpuName = when (arch) {
+                "amd64", "x86_64" -> "x64"
+                "aarch64", "arm64" -> "arm64"
+                "x86", "i386", "i486", "i586", "i686" -> "ia32"
+                else -> arch
+            }
+            return "$osName-$cpuName"
+        }
+    }
+
+    @TaskAction
+    fun bundle() {
+        val work = workDir.get().asFile
+        work.mkdirs()
+
+        val version = dshVersion.get()
+        val platformTargets = targets.get()
+        check(platformTargets.isNotEmpty()) { "dsh.runtime.targets 不能为空" }
+
+        // 基底必须是构建机自己的平台：只有它的二进制能在这里真正执行，后面的自检才有意义。
+        val host = hostTarget()
+        check(host in platformTargets) {
+            "当前构建机平台是 $host，但它不在 dsh.runtime.targets（$platformTargets）里。" +
+                "自检需要在构建机上真实运行一次 dsh，请把 $host 加进目标列表，" +
+                "或换一台属于目标平台的机器来构建。"
+        }
+
+        // ── 1. 只解析宿主平台依赖（全流程唯一一次真正跑 npm）──────────────
+        resolveTarget(work, host, version)
+
+        // ── 2. 补齐平台专有包：按 lockfile 定点抓取 ──────────────────────
+        // 不再对每个平台各跑一次 npm：那样既慢（每次都要重写上万文件），又会在中途
+        // 留下含全部平台变体的脏树。见 fetchPlatformPackages 的说明。
+        //
+        // 这一步对**所有**目标平台（含宿主）执行，而不只是非宿主平台：因为裁剪是就地删
+        // 文件，切换 sharp 模式后宿主自己的原生包也需要能自动找回来，不必重跑 npm。
+        val merged = File(work, "raw/$host")
+        val mergedModules = File(merged, "node_modules")
+        check(mergedModules.isDirectory) { "基底平台的 node_modules 不存在：$mergedModules" }
+        val lockFile = File(merged, "package-lock.json")
+        check(lockFile.isFile) { "缺少 package-lock.json，无法确定各平台的专有依赖：$lockFile" }
+        val fetched = fetchPlatformPackages(lockFile, merged, platformTargets)
+        val ensured = ensurePackages(lockFile, merged, extraPackages)
+        logger.lifecycle("[dsh-runtime] 补入平台专有包 $fetched 个、通用包 $ensured 个")
+
+        // ── 3. 裁剪 ──────────────────────────────────────────────────────
+        val trash = pruneNpmTrash(merged)
+        val droppedPackages = pruneExcludedPackages(merged)
+        val droppedNodePty = pruneNodePty(merged, platformTargets)
+        val pruned = prune(merged)
+        logger.lifecycle(
+            "[dsh-runtime] 裁剪：npm 残骸 $trash 个文件、整包 $droppedPackages 个文件、" +
+                "node-pty $droppedNodePty 个文件、通用规则 $pruned 个文件"
+        )
+
+        // ── 4. 校验：必须真能跑起来，否则宁可让构建失败 ──────────────────
+        // 裁剪是「删文件」，一旦误删就会在用户机器上才暴露。这里做两级自检：
+        //   a) `dsh --version`            —— 启动器与基本依赖是否完整
+        //   b) `dsh --profile web --dump-config` —— 整个 web profile 的插件树能否组合出来，
+        //      能发现缺包 / 补丁解析失败（比只看 --version 强得多）
+        val dshBin = File(mergedModules, "@deepseek-ai/dsh/lib/bin.js")
+        check(dshBin.isFile) { "未找到 dsh 入口：$dshBin（依赖解析失败？）" }
+
+        val versionOut = ByteArrayOutputStream()
+        execOps.exec {
+            commandLine(nodeExecutable.get(), dshBin.absolutePath, "--version")
+            standardOutput = versionOut
+            errorOutput = versionOut
+            isIgnoreExitValue = true
+            timeout.set(Duration.ofMinutes(3))
+        }
+        val printed = versionOut.toString(Charsets.UTF_8.name()).trim()
+        check(printed.contains(version)) {
+            "内置运行时自检失败：期望版本 $version，实际输出「$printed」"
+        }
+
+        val dumpOut = ByteArrayOutputStream()
+        execOps.exec {
+            commandLine(
+                nodeExecutable.get(), dshBin.absolutePath,
+                "--profile", "web", "--dump-config"
+            )
+            standardOutput = dumpOut
+            errorOutput = dumpOut
+            isIgnoreExitValue = true
+            timeout.set(Duration.ofMinutes(5))
+        }
+        val dump = dumpOut.toString(Charsets.UTF_8.name())
+        val dumpLines = dump.lines().size
+        check(dumpLines > 100 && dump.contains("@deepseek-ai/dsh-base")) {
+            "内置运行时自检失败：web profile 组合异常（输出 $dumpLines 行）\n" +
+                dump.take(2000)
+        }
+        logger.lifecycle(
+            "[dsh-runtime] 自检通过：dsh $printed；web profile 组合正常（$dumpLines 行）"
+        )
+
+        // ── 4.5 平台完整性校验 ────────────────────────────────────────────
+        // 上面的自检只能验证「构建机这一种平台」（别的平台的二进制根本没法在这里执行）。
+        // 所以再按目标平台逐个点名，确认各自的原生包都在。这类包缺失时 JS 层完全看不出来，
+        // 只有用户在那台机器上真正打开终端 / 贴图片时才会炸，必须在这里拦下。
+        verifyPlatformNatives(merged, platformTargets)
+
+        // ── 4.6 可执行位清单 ──────────────────────────────────────────────
+        val executables = writeExecutableManifest(merged, platformTargets)
+        logger.lifecycle("[dsh-runtime] 记录 $executables 个需要可执行位的文件")
+
+        // ── 5. 打包 ──────────────────────────────────────────────────────
+        val zip = outputZip.get().asFile
+        zip.parentFile.mkdirs()
+        zip.delete()
+        val mergedPath = merged.toPath()
+        ZipOutputStream(zip.outputStream().buffered()).use { zos ->
+            Files.walk(mergedPath).use { stream ->
+                stream.filter { Files.isRegularFile(it) }
+                    // 安装标记是构建期用的，不进产物
+                    .filter { it.fileName?.toString() != MARKER_FILE }
+                    .sorted()
+                    .forEach { p ->
+                        val entryName = mergedPath.relativize(p).joinToString("/") { it.toString() }
+                        zos.putNextEntry(ZipEntry(entryName))
+                        Files.newInputStream(p).use { it.copyTo(zos) }
+                        zos.closeEntry()
+                    }
+            }
+        }
+        logger.lifecycle(
+            "[dsh-runtime] 完成：${zip.absolutePath}（%.1f MB）".format(zip.length() / 1024.0 / 1024.0)
+        )
+    }
+
+    /**
+     * 解析某个平台的依赖；已有完整结果（标记匹配）且未要求强制刷新时直接复用。
+     *
+     * 安装一律加 `--ignore-scripts`，这是跨平台构建能跑通的关键：
+     *
+     *  - `koffi` 的 install 脚本会**现场编译原生码**。跨平台构建时它按 `process.platform`
+     *    （即构建机）去找预编译产物，找不到就退回源码编译，于是在 Windows 上编 darwin 的
+     *    `.node` 必然失败（实测跑 1 小时后挂在 `cnoke.cjs`）。而它的运行时二进制其实来自
+     *    `@koromix/koffi-<os>-<arch>` 可选依赖，`src/koffi/index.cjs` 直接 require 它，
+     *    根本不需要编译。
+     *  - `node-pty` 的 postinstall 只在 Windows 上把 `third_party/conpty` 拷进
+     *    `build/Release`，非 Windows 是空操作；而 `lib/utils.js` 的查找顺序是
+     *    `build/Release` → `build/Debug` → `prebuilds/<platform>-<arch>`，包内
+     *    `prebuilds/` 已自带**全平台**产物，回退即可命中。
+     *  - `@deepseek-ai/dsh-subprocess-local` 的 postinstall 只给 node-pty 的
+     *    `spawn-helper` 补可执行位（tarball 会丢掉这个位），交给插件解包后统一 chmod。
+     *  - 其余 `prepare` / `prepublish` 脚本在 registry 安装时本来就不会执行，属噪声。
+     *
+     * 跳过脚本后各平台的树完全由「平台专有可选依赖」决定，既避免交叉编译，也让
+     * 产物在不同构建机上可复现。
+     */
+    private fun resolveTarget(work: File, target: String, version: String) {
+        val parts = target.split("-", limit = 2)
+        require(parts.size == 2) { "目标平台格式应为 <os>-<cpu>，实际为：$target" }
+        val (osName, cpuName) = parts
+
+        val dir = File(work, "raw/$target")
+        val marker = File(dir, MARKER_FILE)
+        val fingerprint = "dsh=$version os=$osName cpu=$cpuName scripts=skip"
+        if (!forceRefresh.get() &&
+            marker.isFile &&
+            marker.readText().trim() == fingerprint &&
+            File(dir, "node_modules/@deepseek-ai/dsh").isDirectory
+        ) {
+            logger.lifecycle("[dsh-runtime] 复用已有解析结果：$target")
+            return
+        }
+
+        // 不删旧目录：npm install 本身是「对账」式的，会把树收敛到目标状态；
+        // 而递归删掉上万个文件在带安全过滤驱动的机器上非常慢，能省则省。
+        dir.mkdirs()
+        logger.lifecycle("[dsh-runtime] 解析宿主平台 $target 的依赖（跳过安装脚本）…")
+        execOps.exec {
+            workingDir = dir
+            commandLine(
+                npmCommand.get() + listOf(
+                    "install",
+                    "--no-audit", "--no-fund", "--loglevel=error",
+                    "--omit=dev", "--ignore-scripts",
+                    "@deepseek-ai/dsh@$version"
+                )
+            )
+        }
+        // 只有整条 install 成功（非零退出会抛异常）才落标记，半截的树下轮会重装
+        marker.writeText(fingerprint)
+    }
+
+    /**
+     * 按目标平台逐个点名，确认各自的原生包都在（见 [requiredNatives]）。
+     *
+     * 这类包一旦缺失，JS 层毫无察觉，只有用户在那台机器上真正用到终端 / ripgrep /
+     * 图片处理时才会报错，所以宁可让构建失败也不要发出一个「在别人电脑上缺胳膊少腿」的包。
+     */
+    private fun verifyPlatformNatives(root: File, platformTargets: List<String>) {
+        val modules = File(root, "node_modules")
+        val problems = mutableListOf<String>()
+
+        platformTargets.forEach { target ->
+            val (osName, cpuName) = target.split("-", limit = 2)
+            requiredNatives(osName).forEach { candidates ->
+                val hit = candidates.any { File(modules, it.format(osName, cpuName)).isDirectory }
+                if (!hit) problems += "$target 缺少 ${candidates.first().format(osName, cpuName)}"
+            }
+            // node-pty 的原生绑定是「一个包带全平台 prebuilds」，按平台子目录单独确认。
+            // 注意 Windows 上是 conpty.node，只有 Unix 才有 pty.node。
+            val ptyModule = if (osName == "win32") "conpty.node" else "pty.node"
+            val pty = "node-pty/prebuilds/$target/$ptyModule"
+            if (!File(modules, pty).isFile) problems += "$target 缺少 $pty"
+        }
+
+        check(problems.isEmpty()) {
+            "内置运行时平台完整性校验失败（共 ${problems.size} 项）：\n" +
+                problems.joinToString("\n") +
+                "\n多半是某个平台的依赖没装全；用 -Pdsh.runtime.refresh=true 重跑可强制重装。"
+        }
+        logger.lifecycle(
+            "[dsh-runtime] 平台完整性校验通过：${platformTargets.size} 个目标平台的原生包齐全"
+        )
+    }
+
+    /**
+     * 按 lockfile 把其余平台的「平台专有包」定点抓下来，解包进基底树。
+     *
+     * 为什么不直接对每个平台各跑一次 `npm install --os=X --cpu=Y`：
+     *  - npm 的 `--os/--cpu` 过滤发生在 reify 落盘阶段，中途的 node_modules 会短暂
+     *    包含**全部平台**的变体（实测 darwin 目标下 koffi 的 android/freebsd/openbsd
+     *    变体全在），进程一旦中断就留下一棵脏树；
+     *  - 每跑一次都要重写一万多个文件，在带安全过滤驱动的机器上动辄十几分钟。
+     *
+     * 而 npm 的 lockfile 本身是**跨平台**的：它记录了所有 os/cpu 变体的包，连同 tarball
+     * 地址与 sha512。于是「按平台只取所需」变成一次精确的定点下载 —— 快、可控、可复现，
+     * 而且天然排除了 freebsd / android / ppc64 这些我们根本不发布的变体。
+     *
+     * @return 实际解包出来的包个数
+     */
+    private fun fetchPlatformPackages(
+        lockFile: File,
+        root: File,
+        targets: List<String>
+    ): Int {
+        @Suppress("UNCHECKED_CAST")
+        val lock = JsonSlurper().parse(lockFile) as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val packages = lock["packages"] as? Map<String, Any?> ?: emptyMap()
+
+        // 摘出所有带平台约束的条目
+        data class PlatformPackage(
+            val path: String,
+            val resolved: String,
+            val integrity: String?,
+            val os: List<String>,
+            val cpu: List<String>
+        )
+
+        val platformPackages = packages.mapNotNull { (path, raw) ->
+            if (!path.startsWith("node_modules/")) return@mapNotNull null
+            val meta = raw as? Map<*, *> ?: return@mapNotNull null
+            val osList = (meta["os"] as? List<*>)?.map { it.toString() } ?: emptyList()
+            val cpuList = (meta["cpu"] as? List<*>)?.map { it.toString() } ?: emptyList()
+            if (osList.isEmpty() && cpuList.isEmpty()) return@mapNotNull null
+            val resolved = meta["resolved"] as? String ?: return@mapNotNull null
+            PlatformPackage(path, resolved, meta["integrity"] as? String, osList, cpuList)
+        }
+
+        var fetched = 0
+        targets.forEach { target ->
+            val (osName, cpuName) = target.split("-", limit = 2)
+            var count = 0
+            platformPackages.forEach { pkg ->
+                if (!matches(pkg.os, osName) || !matches(pkg.cpu, cpuName)) return@forEach
+                // path 形如 node_modules/@scope/name
+                val name = pkg.path.removePrefix("node_modules/")
+                if (excludedPackages.any { globMatches(it, name) }) return@forEach
+                // 基底平台自己的包已存在，跳过
+                val dest = File(root, pkg.path)
+                if (dest.isDirectory) return@forEach
+                downloadAndExtract(pkg.resolved, pkg.integrity, dest)
+                count++
+            }
+            fetched += count
+            logger.lifecycle("[dsh-runtime] $target：补入 $count 个专有包")
+        }
+        return fetched
+    }
+
+    /** 平台约束匹配：约束为空（不限制）或含 `any` 即视为匹配。 */
+    private fun matches(constraint: List<String>, value: String): Boolean =
+        constraint.isEmpty() || constraint.any { it.equals(value, ignoreCase = true) || it == "any" }
+
+    /**
+     * 补齐 [extraPackages] 里点名、但树上已经不存在的包。
+     *
+     * 地址同样取自 lockfile，因此和平台专有包走完全相同的下载与校验路径。
+     */
+    private fun ensurePackages(lockFile: File, root: File, names: List<String>): Int {
+        if (names.isEmpty()) return 0
+        @Suppress("UNCHECKED_CAST")
+        val lock = JsonSlurper().parse(lockFile) as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val packages = lock["packages"] as? Map<String, Any?> ?: emptyMap()
+
+        var fetched = 0
+        names.forEach { name ->
+            val path = "node_modules/$name"
+            if (File(root, path).isDirectory) return@forEach
+            val meta = packages[path] as? Map<*, *>
+            val resolved = meta?.get("resolved") as? String
+            check(resolved != null) { "lockfile 里找不到 $name 的下载地址，无法补齐" }
+            downloadAndExtract(resolved, meta["integrity"] as? String, File(root, path))
+            fetched++
+        }
+        return fetched
+    }
+
+    /** 极简通配匹配，只支持 `*`。 */
+    private fun globMatches(pattern: String, name: String): Boolean =
+        Regex(pattern.split("*").joinToString(".*") { Regex.escape(it) }).matches(name)
+
+    /** 下载一个 tarball、校验 sha512 后解包到 [dest]。 */
+    private fun downloadAndExtract(url: String, integrity: String?, dest: File) {
+        val connection = URI(url).toURL().openConnection().apply {
+            connectTimeout = 30_000
+            readTimeout = 300_000
+        }
+        val payload = ByteArrayOutputStream().also { out ->
+            connection.getInputStream().use { it.copyTo(out) }
+        }.toByteArray()
+
+        // lockfile 里的 sha512 与 npm 用的是同一套算法，顺手校验一下，
+        // 避免半截下载 / 镜像不一致悄悄变成用户机器上的崩溃
+        if (integrity != null && integrity.startsWith("sha512-")) {
+            val actual = Base64.getEncoder()
+                .encodeToString(MessageDigest.getInstance("SHA-512").digest(payload))
+            check(actual == integrity.removePrefix("sha512-")) {
+                "内置运行时下载校验失败（sha512 不匹配）：$url"
+            }
+        }
+
+        dest.mkdirs()
+        extractTarGz(ByteArrayInputStream(payload), dest)
+    }
+
+    /**
+     * 极简 tar 解包：只处理 npm 包会出现的条目。
+     *
+     * npm 的 tarball 一律以 `package/` 开头，解包时剥掉这一层；不在该目录下的条目
+     * 直接丢弃。另外需要处理两种「改名字段」：
+     *  - GNU 长文件名（typeflag `L`），内容就是下一条目的完整路径；
+     *  - pax 扩展头（typeflag `x`），路径藏在 `path=` 记录里。
+     */
+    private fun extractTarGz(input: InputStream, dest: File) {
+        val header = ByteArray(512)
+        GZIPInputStream(BufferedInputStream(input)).use { gz ->
+            var pendingName: String? = null
+            while (true) {
+                if (!readFully(gz, header)) break
+                if (header.all { it == 0.toByte() }) break // 空块 = 归档结束
+
+                val typeFlag = header[156].toInt().toChar()
+                val size = readOctal(header, 124, 12)
+                var name = readString(header, 0, 100)
+                val prefix = readString(header, 345, 155)
+
+                if (typeFlag == 'L') {
+                    pendingName = String(readBlock(gz, size), Charsets.UTF_8).trimEnd('\u0000')
+                    continue
+                }
+                if (typeFlag == 'x' || typeFlag == 'g') {
+                    pendingName = parsePaxPath(readBlock(gz, size))
+                    continue
+                }
+
+                if (pendingName != null) {
+                    name = pendingName!!
+                    pendingName = null
+                } else if (prefix.isNotEmpty()) {
+                    name = "$prefix/$name"
+                }
+
+                val relative = name.removePrefix("package/").takeIf { name.startsWith("package/") }
+                if (relative.isNullOrEmpty()) {
+                    // 归档里不该有 package/ 之外的条目；有也直接丢弃
+                    readBlock(gz, size)
+                    continue
+                }
+
+                val out = File(dest, relative)
+                val isDir = typeFlag == '5' || relative.endsWith("/")
+                if (isDir) {
+                    out.mkdirs()
+                    readBlock(gz, size)
+                    continue
+                }
+                if (typeFlag != '0' && typeFlag != '\u0000' && typeFlag != '7') {
+                    readBlock(gz, size) // 符号链接/硬链接等，npm 包里不会出现
+                    continue
+                }
+                val content = readBlock(gz, size)
+                out.parentFile?.mkdirs()
+                out.writeBytes(content)
+            }
+        }
+    }
+
+    /** 读满一个 512 字节的 tar 块；读到文件尾返回 false。 */
+    private fun readFully(input: InputStream, buffer: ByteArray): Boolean {
+        var read = 0
+        while (read < buffer.size) {
+            val n = input.read(buffer, read, buffer.size - read)
+            if (n < 0) return false
+            read += n
+        }
+        return true
+    }
+
+    /** 读 [size] 字节的数据，并跳过 tar 的 512 字节对齐填充。 */
+    private fun readBlock(input: InputStream, size: Int): ByteArray {
+        val data = ByteArray(size)
+        var read = 0
+        while (read < size) {
+            val n = input.read(data, read, size - read)
+            check(n >= 0) { "tar 数据不完整" }
+            read += n
+        }
+        val padding = (512 - size % 512) % 512
+        if (padding > 0) {
+            val pad = ByteArray(padding)
+            var skipped = 0
+            while (skipped < padding) {
+                val n = input.read(pad, skipped, padding - skipped)
+                check(n >= 0) { "tar 数据不完整（填充区）" }
+                skipped += n
+            }
+        }
+        return data
+    }
+
+    private fun readString(buffer: ByteArray, offset: Int, length: Int): String {
+        val end = (offset until offset + length).firstOrNull { buffer[it] == 0.toByte() }
+            ?: (offset + length)
+        return String(buffer, offset, end - offset, Charsets.UTF_8).trim()
+    }
+
+    private fun readOctal(buffer: ByteArray, offset: Int, length: Int): Int {
+        val text = String(buffer, offset, length, Charsets.US_ASCII)
+            .trim { it <= ' ' || it == '\u0000' }
+        return text.toIntOrNull(8) ?: 0
+    }
+
+    /** 从 pax 扩展头里取 `path=`；记录格式是「长度 键=值\n」循环。 */
+    private fun parsePaxPath(data: ByteArray): String? {
+        val text = String(data, Charsets.UTF_8)
+        var index = 0
+        while (index < text.length) {
+            val space = text.indexOf(' ', index)
+            if (space < 0) break
+            val length = text.substring(index, space).toIntOrNull() ?: break
+            if (length <= 0 || index + length > text.length) break
+            val record = text.substring(space + 1, index + length).trimEnd('\n')
+            if (record.startsWith("path=")) return record.removePrefix("path=")
+            index += length
+        }
+        return null
+    }
+
+    /**
+     * 记录哪些文件需要可执行位。
+     *
+     * zip 格式不保留 Unix 权限位，而 node-pty 的 `spawn-helper`（macOS 上 fork 子进程用）
+     * 与 ripgrep 的 `rg` 必须是可执行的。把清单写进产物，交给插件解包后统一 chmod；
+     * Windows 上本来就没有可执行位一说，忽略即可。
+     */
+    private fun writeExecutableManifest(root: File, platformTargets: List<String>): Int {
+        val relativePaths = platformTargets.flatMap { target ->
+            val osName = target.split("-", limit = 2).first()
+            buildList {
+                if (osName != "win32") add("@vscode/ripgrep-$target/bin/rg")
+                // spawn-helper 只有 macOS 的 prebuild 里才有
+                if (osName == "darwin") add("node-pty/prebuilds/$target/spawn-helper")
+            }
+        }.filter { File(root, "node_modules/$it").isFile }
+
+        File(root, EXEC_MANIFEST).writeText(relativePaths.joinToString("\n", postfix = "\n"))
+        return relativePaths.size
+    }
+
+    /** 删掉运行时用不到的文件，返回删除的文件数。 */
+    private fun prune(root: File): Int {
+        val rootPath = root.toPath()
+        val dirs = mutableListOf<Path>()
+        val files = mutableListOf<Path>()
+        // 一次遍历同时收集目录与文件
+        Files.walk(rootPath).use { stream ->
+            stream.forEach { p ->
+                if (Files.isDirectory(p)) {
+                    if (p.fileName?.toString()?.lowercase() in prunableDirs) dirs.add(p)
+                } else if (Files.isRegularFile(p)) {
+                    files.add(p)
+                }
+            }
+        }
+
+        var removed = 0
+        // 目录裁剪：从浅到深，父目录删掉后子目录自然消失
+        dirs.sortedBy { it.nameCount }.forEach { p ->
+            val dir = p.toFile()
+            if (!dir.exists()) return@forEach
+            removed += countFiles(p)
+            dir.deleteRecursively()
+        }
+        // 文件裁剪
+        files.forEach { p ->
+            val name = p.fileName.toString().lowercase()
+            val ext = name.substringAfterLast('.', "")
+            if (keepFileNames.none { name.startsWith(it) } && ext in prunableExtensions) {
+                if (p.toFile().delete()) removed++
+            }
+        }
+        return removed
+    }
+
+    private fun countFiles(dir: Path): Int {
+        var n = 0
+        Files.walk(dir).use { stream -> stream.forEach { if (Files.isRegularFile(it)) n++ } }
+        return n
+    }
+
+    /** 列出 node_modules 下的包目录（`@scope` 展开一层），返回 `@scope/name` → 目录。 */
+    private fun packageDirs(modules: File): List<Pair<String, File>> {
+        val out = mutableListOf<Pair<String, File>>()
+        modules.listFiles()?.forEach { entry ->
+            if (!entry.isDirectory) return@forEach
+            // .bin 里是 npm 建的转发脚本/符号链接，运行时用不到
+            if (entry.name == ".bin") return@forEach
+            if (entry.name.startsWith("@")) {
+                entry.listFiles()?.forEach { sub ->
+                    if (sub.isDirectory) out += "${entry.name}/${sub.name}" to sub
+                }
+            } else {
+                out += entry.name to entry
+            }
+        }
+        return out
+    }
+
+    /** 删掉 [excludedPackages] 里点名的包，返回删除的文件数。 */
+    private fun pruneExcludedPackages(root: File): Int {
+        var removed = 0
+        packageDirs(File(root, "node_modules")).forEach { (name, dir) ->
+            if (excludedPackages.none { globMatches(it, name) }) return@forEach
+            removed += countFiles(dir.toPath())
+            dir.deleteRecursively()
+        }
+        return removed
+    }
+
+    /**
+     * 清掉 npm 留下的「垃圾目录」，返回删除的文件数。
+     *
+     * npm 移除包时不是直接删，而是先把目录改名成 `.<原名>-<随机串>` 藏进 node_modules
+     * （普通 `ls` 看不见），之后再异步清理。一旦安装被中断、或者后续没有触发清理，
+     * 这些目录就会一直留在树上 —— 实测一次构建就留下了 **35 MB 的 sharp 原生包残骸**，
+     * 而且因为名字带了点前缀，按包名匹配的裁剪规则完全看不见它们。
+     *
+     * npm 不会安装以 `.` 开头的包目录（node_modules 根下的 `.bin` 除外），所以见到就删。
+     */
+    private fun pruneNpmTrash(root: File): Int {
+        val modules = File(root, "node_modules")
+        val candidates = mutableListOf<File>()
+        modules.listFiles()?.forEach { entry ->
+            if (!entry.isDirectory || entry.name == ".bin") return@forEach
+            if (entry.name.startsWith(".")) {
+                candidates += entry
+            } else if (entry.name.startsWith("@")) {
+                entry.listFiles()?.forEach { sub ->
+                    if (sub.isDirectory && sub.name.startsWith(".")) candidates += sub
+                }
+            }
+        }
+        var removed = 0
+        candidates.forEach { dir ->
+            removed += countFiles(dir.toPath())
+            dir.deleteRecursively()
+        }
+        return removed
+    }
+
+    /**
+     * node-pty 里跟运行时无关的部分。
+     *
+     *  - `prebuilds/<平台>`：只留目标平台。光是 win32-arm64 一个目录就有 11 MB，
+     *    其中 10.6 MB 还是 `.pdb` 调试符号；
+     *  - `third_party/`（conpty 原始文件）、`src/`（C++ 源码）、`build/`（postinstall
+     *    的编译/拷贝产物）：都是安装期才用得上的原料。运行时 `lib/utils.js` 的查找顺序是
+     *    `build/Release` → `build/Debug` → `prebuilds/<platform>-<arch>`，删掉前三者
+     *    会自然回退到 prebuilds，功能不受影响。
+     */
+    private fun pruneNodePty(root: File, platformTargets: List<String>): Int {
+        val pkg = File(root, "node_modules/node-pty")
+        if (!pkg.isDirectory) return 0
+        var removed = 0
+
+        File(pkg, "prebuilds").listFiles()?.forEach { dir ->
+            if (dir.name in platformTargets) return@forEach
+            removed += countFiles(dir.toPath())
+            dir.deleteRecursively()
+        }
+        listOf("third_party", "src", "build").forEach { name ->
+            val dir = File(pkg, name)
+            if (!dir.exists()) return@forEach
+            removed += countFiles(dir.toPath())
+            dir.deleteRecursively()
+        }
+        return removed
+    }
+}
+
+val dshRuntimeVersion: String =
+    providers.gradleProperty("dsh.runtime.version").orElse("0.1.2-rc.1").get()
+
+val dshRuntimeTargets: List<String> =
+    providers.gradleProperty("dsh.runtime.targets")
+        .orElse("win32-x64,darwin-x64,darwin-arm64,linux-x64,linux-arm64")
+        .get()
+        .split(",")
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+
+val dshRuntimeZip = layout.buildDirectory.file("dsh-runtime/dsh-runtime.zip")
+
+/**
+ * npm 的启动命令。
+ *
+ * Windows 上 npm 是 `npm.cmd`，Java 的进程启动器不能直接执行批处理，
+ * 必须经 `cmd /c` 转发；Unix 上直接调 `npm` 即可。
+ * 可用 `-Pdsh.runtime.npm="<完整命令>"` 覆盖（按空格拆分）。
+ */
+val dshRuntimeNpmCommand: List<String> =
+    providers.gradleProperty("dsh.runtime.npm").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?.split(" ")
+        ?.filter { it.isNotBlank() }
+        ?: if (System.getProperty("os.name").lowercase().contains("win")) {
+            listOf("cmd", "/c", "npm")
+        } else {
+            listOf("npm")
+        }
+
+val bundleDshRuntime = tasks.register<BundleDshRuntimeTask>("bundleDshRuntime") {
+    group = "build"
+    description = "打包内置 dsh 运行时（裁剪后打进 JAR，免去首次 npx 下载等待）"
+    // 只在内置未关闭时参与构建
+    onlyIf { providers.gradleProperty("dsh.runtime.skip").orNull != "true" }
+    dshVersion.set(dshRuntimeVersion)
+    targets.set(dshRuntimeTargets)
+    npmCommand.set(dshRuntimeNpmCommand)
+    nodeExecutable.set(providers.gradleProperty("dsh.runtime.node").orElse("node"))
+    forceRefresh.set(providers.gradleProperty("dsh.runtime.refresh").map { it == "true" }.orElse(false))
+    sharpMode.set(providers.gradleProperty("dsh.runtime.sharp").orElse("native"))
+    workDir.set(layout.buildDirectory.dir("dsh-runtime/work"))
+    outputZip.set(dshRuntimeZip)
+}
+
+// 把运行时 zip 作为资源打进 JAR：JAR 里只多一个条目，避免上万个小文件拖慢构建与加载。
+tasks.named<ProcessResources>("processResources") {
+    dependsOn(bundleDshRuntime)
+    from(dshRuntimeZip) {
+        into("dsh-runtime")
+        rename { "dsh-runtime.zip" }
     }
 }
