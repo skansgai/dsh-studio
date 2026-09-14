@@ -1,0 +1,42 @@
+#!/bin/sh
+# 阻止把被 DLP 加密的「密文」提交进仓库。
+#
+# 背景：企业 DLP（E-SafeNet）会按扩展名把 .js / .ts / .json 之类就地加密，而且对
+# 「已经被加密过的文件」会在 1~2 秒内重新加密。实测文件写盘与 `git add` 之间的窗口
+# 就足够被加密，于是密文被当成源码提交 —— overlay.js 就这样从 2026-09-07 烂到 09-14，
+# 期间「背景图 / 透明度」功能实际是坏的，而 `git status` 完全看不出来。
+#
+# 安装：见同目录 README.md
+# 临时绕过：git commit --no-verify
+
+MAGIC="E-SafeNet"
+
+# 只看暂存区的内容（不是工作区）—— 工作区是明文不代表提交进去的是明文。
+list=$(mktemp)
+bad=$(mktemp)
+trap 'rm -f "$list" "$bad"' EXIT
+
+git diff --cached --name-only --diff-filter=ACM > "$list"
+
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if git cat-file -p ":$f" 2>/dev/null | head -c 64 | grep -q "$MAGIC"; then
+        printf '%s\n' "$f" >> "$bad"
+    fi
+done < "$list"
+
+if [ -s "$bad" ]; then
+    echo "" >&2
+    echo "✗ 拒绝提交：以下文件的【暂存内容】是密文（被 DLP 加密了）：" >&2
+    while IFS= read -r f; do
+        echo "    $f" >&2
+    done < "$bad"
+    echo "" >&2
+    echo "  处理办法：用 python 把明文写回工作区（基线取 git show HEAD:<path>），" >&2
+    echo "  紧接着立刻 git add —— python 写盘后有几秒明文窗口，够 git 读完。" >&2
+    echo "  确实要提交密文：git commit --no-verify" >&2
+    echo "" >&2
+    exit 1
+fi
+
+exit 0
