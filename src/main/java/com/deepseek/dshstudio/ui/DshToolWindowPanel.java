@@ -66,16 +66,22 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     private static final JBColor COLOR_ERROR = new JBColor(0xC5221F, 0xF28B82);
     private static final JBColor COLOR_IDLE = new JBColor(new Color(0x808080), new Color(0xA0A0A0));
 
-    /** 注入到 dsh 网页的「通用设置 + 背景浮层」脚本（来自 classpath 资源 /dsh/overlay.js）。 */
+    /** 注入到 dsh 网页的「通用设置 + 背景浮层」脚本（classpath 资源 /dsh/overlay.js.txt，兼容旧名 .js）。 */
     private static final String OVERLAY_SCRIPT;
     static {
         String loaded = "";
-        try (InputStream in = DshToolWindowPanel.class.getResourceAsStream("/dsh/overlay.js")) {
-            if (in != null) {
-                loaded = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        // 资源名优先用 .js.txt：本机企业 DLP（E-SafeNet）会按扩展名把 .js 就地加密，
+        // 仓库里的 overlay.js 一旦变成密文，注入到网页的就是乱码（0.3.3 起一直是这个状态）。
+        // 换 .txt 扩展名可以绕开，内容仍是 JS；旧名保留兼容。
+        for (String path : new String[]{"/dsh/overlay.js.txt", "/dsh/overlay.js"}) {
+            try (InputStream in = DshToolWindowPanel.class.getResourceAsStream(path)) {
+                if (in != null) {
+                    loaded = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+                    break;
+                }
+            } catch (IOException ignored) {
+                // 资源缺失：浮层不可用，不影响主功能
             }
-        } catch (IOException ignored) {
-            // 资源缺失：浮层不可用，不影响主功能
         }
         OVERLAY_SCRIPT = loaded;
     }
