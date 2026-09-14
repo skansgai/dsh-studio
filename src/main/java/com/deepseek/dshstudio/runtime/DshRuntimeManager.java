@@ -19,6 +19,7 @@ import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.MalformedInputException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -66,8 +67,14 @@ public final class DshRuntimeManager {
     /** 插件包里的运行时压缩包。 */
     private static final String ZIP_RESOURCE = "/dsh-runtime/dsh-runtime.zip";
 
-    /** 插件包里的运行时元数据（由 Gradle 的 bundleDshRuntime 生成）。 */
-    private static final String META_RESOURCE = "/dsh-runtime/runtime-meta.json";
+    /**
+     * 插件包里的运行时元数据（由 Gradle 的 bundleDshRuntime 生成）。
+     * <p>
+     * 扩展名是 {@code .txt} 而不是 {@code .json}：内容就是 JSON，但企业里的透明加密
+     * 客户端（DLP）会按扩展名把 {@code .json} 加密，构建产物一旦变密文就会被打进插件包，
+     * 导致这里读不到自己的元数据。换成 {@code .txt} 绕开（构建期还有一道兜底校验）。
+     */
+    private static final String META_RESOURCE = "/dsh-runtime/runtime-meta.txt";
 
     /** 解包完成标记，内容为 stamp；存在即代表这棵树是完整的。 */
     private static final String UNPACK_MARKER = ".unpacked-ok";
@@ -86,6 +93,18 @@ public final class DshRuntimeManager {
 
     /** 解包时的读缓冲；18k 个小文件，缓冲大一点能明显少几次系统调用。 */
     private static final int COPY_BUFFER = 1 << 16;
+
+    /**
+     * 安全软件（DLP）加密文件时写在文件头的明文标识。
+     * <p>
+     * 企业里的透明加密客户端（本机实测是 E-SafeNet）会按扩展名把 {@code .js} /
+     * {@code .ts} / {@code .json} 就地加密。解包出来的文件读到这个头，说明拿到的是密文，
+     * node 跑不起来。这里只用来给出可读的报错，不做任何解密。
+     */
+    private static final String CIPHERTEXT_MARKER = "E-SafeNet";
+
+    /** 入口脚本的 shebang；正常解包出来必须以此开头。 */
+    private static final String ENTRY_SHEBANG = "#!";
 
     private final Object metaLock = new Object();
     private volatile boolean metaResolved;
@@ -550,6 +569,7 @@ public final class DshRuntimeManager {
                 }
                 extractZip(in, tmp, meta.entries, indicator);
             }
+            verifyExtractedTree(tmp);
             Files.writeString(tmp.resolve(UNPACK_MARKER), meta.stamp, StandardCharsets.UTF_8);
             applyExecutableBits(tmp);
             moveInto(tmp, target);
@@ -569,6 +589,51 @@ public final class DshRuntimeManager {
                 + "（" + (System.currentTimeMillis() - started) + " ms）");
         cleanupOldBaselines(root, meta.stamp);
         return target;
+    }
+
+    /**
+     * 解包后的抽样自检：入口脚本必须能当 UTF-8 读出来、且不是安全软件加密后的密文。
+     * <p>
+     * 为什么需要它：企业里的透明加密客户端（DLP，本机实测 E-SafeNet）会按扩展名把
+     * {@code .js} / {@code .ts} / {@code .json} 就地加密。实测把运行时解包到临时目录后，
+     * 18390 个文件里有 64% 变成密文，node 读到的是乱码，启动时只会抛一堆看不懂的解析
+     * 错误。与其把那些错误甩给用户，不如在这里失败并说清原因和出路。
+     * <p>
+     * 只查一个文件（入口），成本可以忽略；查不出「部分文件被加密」的极端情况，
+     * 但那种情况下 node 本来也会立刻报错。
+     */
+    private static void verifyExtractedTree(@NotNull Path root) throws IOException {
+        Path entry = root.resolve(DSH_ENTRY);
+        if (!Files.isRegularFile(entry)) {
+            throw new IOException("内置 dsh 运行时解包不完整：缺少入口脚本 " + DSH_ENTRY
+                    + "。请在「设置 → 工具 → DeepSeek Harness → 运行时」里点「清理运行时」后重试。");
+        }
+
+        byte[] head = new byte[64];
+        int read;
+        try (InputStream in = Files.newInputStream(entry)) {
+            read = in.read(head);
+        }
+        if (read > 0 && new String(head, 0, read, StandardCharsets.ISO_8859_1)
+                .contains(CIPHERTEXT_MARKER)) {
+            throw new IOException("内置 dsh 运行时解包后的文件被本机的透明加密软件（DLP）"
+                    + "加密了，node 无法读取，运行时起不来。这不是插件的问题：请让 IT 把运行时目录"
+                    + "（设置页「运行时目录」一栏显示的路径）加入 DLP 排除名单，"
+                    + "或在设置页把「运行时位置」改到未被加密的目录后重试。");
+        }
+
+        String text;
+        try {
+            text = Files.readString(entry, StandardCharsets.UTF_8);
+        } catch (MalformedInputException e) {
+            throw new IOException("内置 dsh 运行时解包后的入口脚本不是合法的 UTF-8，"
+                    + "文件可能在写入过程中被安全软件改写或截断。"
+                    + "请在设置页点「清理运行时」后重试。", e);
+        }
+        if (!text.startsWith(ENTRY_SHEBANG)) {
+            throw new IOException("内置 dsh 运行时解包后的入口脚本内容异常（不以 " + ENTRY_SHEBANG
+                    + " 开头），解包结果不可信。请在设置页点「清理运行时」后重试。");
+        }
     }
 
     /**

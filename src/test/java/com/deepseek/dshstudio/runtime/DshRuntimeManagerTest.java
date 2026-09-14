@@ -27,7 +27,7 @@ import static org.junit.Assume.assumeTrue;
 public class DshRuntimeManagerTest {
 
     private static final String ZIP_RESOURCE = "/dsh-runtime/dsh-runtime.zip";
-    private static final String META_RESOURCE = "/dsh-runtime/runtime-meta.json";
+    private static final String META_RESOURCE = "/dsh-runtime/runtime-meta.txt";
 
     @Test
     public void metaIsConsistentWithZip() throws Exception {
@@ -35,7 +35,7 @@ public class DshRuntimeManagerTest {
             assumeTrue("构建时跳过了 bundleDshRuntime，跳过", zip != null);
         }
         try (InputStream in = DshRuntimeManager.class.getResourceAsStream(META_RESOURCE)) {
-            assertNotNull("有 zip 就必须有 runtime-meta.json", in);
+            assertNotNull("有 zip 就必须有 runtime-meta.txt", in);
             String json = new String(in.readAllBytes(), StandardCharsets.UTF_8);
             assertTrue(json.contains("\"dshVersion\""));
             assertTrue(json.contains("\"stamp\""));

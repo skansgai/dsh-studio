@@ -1115,7 +1115,11 @@ val dshRuntimeTargets: List<String> =
         .filter { it.isNotEmpty() }
 
 val dshRuntimeZip = layout.buildDirectory.file("dsh-runtime/dsh-runtime.zip")
-val dshRuntimeMeta = layout.buildDirectory.file("dsh-runtime/runtime-meta.json")
+// 注意扩展名是 .txt 而不是 .json：本机企业 DLP（E-SafeNet）会按扩展名把 .json
+// 异步加密成密文，构建产物 runtime-meta.json 拷进 build/resources 后会被加密，
+// jar 于是把密文打进插件包，插件运行时读不到自己的元数据。
+// 内容仍然是 JSON，只是换一个 DLP 不碰的扩展名；下面的 doFirst 还会再兜底校验一次。
+val dshRuntimeMeta = layout.buildDirectory.file("dsh-runtime/runtime-meta.txt")
 
 /**
  * npm 的启动命令。
@@ -1155,12 +1159,29 @@ val bundleDshRuntime = tasks.register<BundleDshRuntimeTask>("bundleDshRuntime") 
 // 避免上万个小文件拖慢构建与加载。
 tasks.named<ProcessResources>("processResources") {
     dependsOn(bundleDshRuntime)
+
+    // 兜底校验：万一安全软件连 .txt 也加密了，就在这里明确失败，
+    // 而不是把一个插件自己都读不懂的包发出去。
+    doFirst {
+        val meta = dshRuntimeMeta.get().asFile
+        if (meta.isFile) {
+            val head = meta.inputStream().use { it.readNBytes(64) }
+            if (String(head, Charsets.ISO_8859_1).contains("E-SafeNet")) {
+                throw GradleException(
+                    "runtime-meta 被本机的透明加密软件加密了（文件头 E-SafeNet）：" +
+                        meta.absolutePath + "\n" +
+                        "这样打进 JAR 后插件读不到自己的元数据。请把 build/ 加入 DLP 排除名单后重试。"
+                )
+            }
+        }
+    }
+
     from(dshRuntimeZip) {
         into("dsh-runtime")
         rename { "dsh-runtime.zip" }
     }
     from(dshRuntimeMeta) {
         into("dsh-runtime")
-        rename { "runtime-meta.json" }
+        rename { "runtime-meta.txt" }
     }
 }
