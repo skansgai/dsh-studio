@@ -1,6 +1,7 @@
 package com.deepseek.dshstudio.actions;
 
 import com.deepseek.dshstudio.DshStudioConstants;
+import com.deepseek.dshstudio.runtime.DshNodeChecker;
 import com.deepseek.dshstudio.runtime.DshRuntimeManager;
 import com.deepseek.dshstudio.runtime.DshRuntimeMode;
 import com.deepseek.dshstudio.server.DshServerManager;
@@ -79,18 +80,15 @@ public final class DshHeadlessTaskAction extends AnAction {
                     NotificationType.ERROR);
             return;
         }
-        if (!DshUtil.isNodeAvailable()) {
-            showNotification(project, "未检测到 Node.js",
-                    "dsh 需要 Node.js 才能运行。请先安装 Node.js 18+（https://nodejs.org）。",
-                    NotificationType.WARNING);
-            return;
-        }
-
         List<String> command;
         try {
             command = resolveCommand(project, task);
         } catch (Exception ex) {
             showNotification(project, "无法构建 headless 命令", ex.getMessage(), NotificationType.ERROR);
+            return;
+        }
+        // 缺 Node 或版本偏低时弹一次引导（只警告不拦截）。自定义成非 Node 命令时不打扰。
+        if (DshNodeChecker.commandNeedsNode(command) && !DshNodeChecker.guideIfNeeded(project)) {
             return;
         }
         manager.appendExternalLog("$ " + String.join(" ", command) + "\n");

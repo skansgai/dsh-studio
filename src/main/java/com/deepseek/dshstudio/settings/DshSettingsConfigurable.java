@@ -1,6 +1,7 @@
 package com.deepseek.dshstudio.settings;
 
 import com.deepseek.dshstudio.DshStudioConstants;
+import com.deepseek.dshstudio.runtime.DshNodeChecker;
 import com.deepseek.dshstudio.runtime.DshRuntimeLocation;
 import com.deepseek.dshstudio.runtime.DshRuntimeManager;
 import com.deepseek.dshstudio.runtime.DshRuntimeMode;
@@ -60,8 +61,19 @@ public final class DshSettingsConfigurable implements Configurable {
     private final JBLabel runtimeEffectiveLabel = new JBLabel();
     private final JBLabel runtimeBundledLabel = new JBLabel();
     private final JBLabel runtimePathLabel = new JBLabel();
+    private final JBLabel runtimeNodeLabel = new JBLabel();
+    private final JButton recheckNodeButton = new JButton("重新检测");
     private final JButton unpackButton = new JButton("立即解包");
     private final JButton clearRuntimeButton = new JButton("清理运行时");
+
+    /**
+     * Node 探测结果缓存。
+     * <p>
+     * 探测要起一个 {@code node --version} 子进程，放在每次 {@code refreshRuntimeInfo()} 里
+     * 会在 EDT 上反复阻塞；所以只在首次和用户点「重新检测」时刷新。
+     */
+    @Nullable
+    private DshNodeChecker.Report nodeReport;
 
     // ── 关于（版本 + 检查更新）────
     private final JBLabel pluginVersionLabel = new JBLabel();
@@ -204,6 +216,18 @@ public final class DshSettingsConfigurable implements Configurable {
             c.gridx = 1;
             c.weightx = 1;
             runtime.add(runtimePathLabel, c);
+
+            c.gridy = r++;
+            c.gridx = 0;
+            c.weightx = 0;
+            runtime.add(new JBLabel("Node.js:"), c);
+            c.gridx = 1;
+            c.weightx = 1;
+            recheckNodeButton.addActionListener(e -> refreshNodeInfo(true));
+            JPanel nodeRow = new JPanel(new BorderLayout(8, 0));
+            nodeRow.add(runtimeNodeLabel, BorderLayout.CENTER);
+            nodeRow.add(recheckNodeButton, BorderLayout.EAST);
+            runtime.add(nodeRow, c);
 
             c.gridy = r++;
             c.gridx = 0;
@@ -363,7 +387,10 @@ public final class DshSettingsConfigurable implements Configurable {
                         "在用户目录里写一个小文件要 ~85 毫秒，而系统临时目录被排除在外。" +
                         "1.8 万个文件因此相差约 <b>27 分钟 vs 6 秒</b>，所以 Windows 默认放临时目录；" +
                         "若担心临时目录被系统清理，或所在环境禁止从临时目录执行程序，可改为用户目录。<br>" +
-                        "内置运行时与 npx 都依赖本机安装的 Node.js。可执行位（终端、ripgrep）会在解包时自动补上。" +
+                        "内置运行时与 npx 都依赖本机安装的 <b>Node.js "
+                        + DshStudioConstants.MIN_NODE_VERSION
+                        + " 或更高</b>（该下限来自依赖包的 engines 声明，低于它只提示、不拦截）。" +
+                        "可执行位（终端、ripgrep）会在解包时自动补上。" +
                         "</div></html>");
     }
 
@@ -410,6 +437,27 @@ public final class DshSettingsConfigurable implements Configurable {
         runtimePathLabel.setText(shortenHome(root));
         runtimePathLabel.setToolTipText(root.toString());
         clearRuntimeButton.setEnabled(Files.isDirectory(root));
+
+        refreshNodeInfo(false);
+    }
+
+    /**
+     * 刷新 Node.js 状态行。
+     *
+     * @param force {@code true} 表示重新起子进程探测（「重新检测」按钮）；
+     *              {@code false} 表示复用缓存，避免在 EDT 上反复阻塞
+     */
+    private void refreshNodeInfo(boolean force) {
+        if (force || nodeReport == null) {
+            nodeReport = DshNodeChecker.check();
+        }
+        runtimeNodeLabel.setText(nodeReport.describe());
+        runtimeNodeLabel.setForeground(nodeReport.isOk()
+                ? JBColor.foreground()
+                : new JBColor(0xC5221F, 0xF28B82));
+        runtimeNodeLabel.setToolTipText("内置运行时与系统 dsh 都是 Node 程序。"
+                + "最低版本 " + DshStudioConstants.MIN_NODE_VERSION
+                + " 来自依赖包的 engines 声明，低于它只会提示、不会拦截启动。");
     }
 
     /** 立即解包内置运行时（EDT 上会弹出带进度的模态框）。 */
@@ -611,6 +659,8 @@ public final class DshSettingsConfigurable implements Configurable {
         pluginVersionLabel.setText(DshUtil.getInstalledPluginVersion());
         dshVersionLabel.setText("查询中…");
         dshVersionLabel.setForeground(JBColor.GRAY);
+        // 设置页每次打开都重新探测 Node：用户可能刚在 IDE 运行期间装好
+        nodeReport = null;
         refreshRuntimeInfo();
         refreshDshVersion();
     }

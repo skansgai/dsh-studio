@@ -27,6 +27,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 平台无关的工具方法：健康探测、命令行构建、进程清理、打开浏览器等。
@@ -496,6 +498,55 @@ public final class DshUtil {
             return (p == null || p.trim().isEmpty()) ? "node.exe" : p.trim();
         }
         return "node";
+    }
+
+    /** {@code node --version} 的输出形如 {@code v22.19.0}，也可能带前缀噪音。 */
+    private static final Pattern NODE_VERSION_PATTERN =
+            Pattern.compile("v?(\\d+)\\.(\\d+)\\.(\\d+)");
+
+    /**
+     * 探测本机 Node.js 的版本，返回归一化后的版本号（如 {@code "22.19.0"}）。
+     * <p>
+     * 未安装、执行失败或输出无法解析时返回 {@code null}。**刻意不缓存**：用户可能在 IDE
+     * 运行期间才装好 Node，设置页的「重新检测」需要立刻看到变化。
+     */
+    @Nullable
+    public static String detectNodeVersion() {
+        try {
+            for (String line : runAndRead(resolveNodeExecutable(), "--version")) {
+                String parsed = parseNodeVersion(line);
+                if (parsed != null) {
+                    return parsed;
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            // 没装 node 时 ProcessBuilder.start() 直接抛 IOException；探测失败一律当作"没有"
+            return null;
+        }
+    }
+
+    /**
+     * 从 {@code node --version} 的输出里解析版本号（{@code "v22.19.0"} → {@code "22.19.0"}）。
+     * <p>抽成包级可见的纯函数便于单测。
+     */
+    @Nullable
+    static String parseNodeVersion(@Nullable String output) {
+        if (output == null) {
+            return null;
+        }
+        Matcher matcher = NODE_VERSION_PATTERN.matcher(output);
+        if (!matcher.find()) {
+            return null;
+        }
+        return matcher.group(1) + "." + matcher.group(2) + "." + matcher.group(3);
+    }
+
+    /** 本机 Node.js 是否满足 {@link DshStudioConstants#MIN_NODE_VERSION}。 */
+    public static boolean isNodeVersionSupported() {
+        String version = detectNodeVersion();
+        return version != null
+                && compareVersion(version, DshStudioConstants.MIN_NODE_VERSION) >= 0;
     }
 
     /** 将任意目录字符串规范化为绝对路径（用于展示）。 */

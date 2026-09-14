@@ -145,4 +145,32 @@ public class DshUtilTest {
         assertEquals("4 天前", DshUtil.relativeTime(now - 4 * 86_400_000 - 5_000));
         assertEquals("刚刚", DshUtil.relativeTime(now + 60_000));
     }
+
+    @Test
+    public void parseNodeVersionNormalizesOutput() {
+        assertEquals("22.19.0", DshUtil.parseNodeVersion("v22.19.0"));
+        assertEquals("22.19.0", DshUtil.parseNodeVersion("22.19.0"));
+        // node --version 在 Windows 上会带 \r\n，前面也可能有噪音
+        assertEquals("18.20.4", DshUtil.parseNodeVersion("Node v18.20.4\r\n"));
+        // 只取第一处匹配，不被后面的数字带偏
+        assertEquals("24.1.2", DshUtil.parseNodeVersion("v24.1.2 extra 9.9.9"));
+        // 解析不出来时返回 null，而不是猜一个版本出来
+        assertNull(DshUtil.parseNodeVersion(null));
+        assertNull(DshUtil.parseNodeVersion(""));
+        assertNull(DshUtil.parseNodeVersion("'node' is not recognized as an internal command"));
+        assertNull(DshUtil.parseNodeVersion("v22"));
+    }
+
+    @Test
+    public void minNodeVersionIsDerivedFromEngines() {
+        // 依据见 DshStudioConstants.MIN_NODE_VERSION 的注释：
+        // undici@8.10.2 / @earendil-works/pi-ai@0.84.4 声明 >= 22.19.0，commander@15 声明 >= 22.12.0
+        assertEquals("22.19.0", DshStudioConstants.MIN_NODE_VERSION);
+        assertTrue(DshUtil.compareVersion("22.19.0", DshStudioConstants.MIN_NODE_VERSION) >= 0);
+        assertTrue(DshUtil.compareVersion("22.23.2", DshStudioConstants.MIN_NODE_VERSION) >= 0);
+        assertTrue(DshUtil.compareVersion("24.21.0", DshStudioConstants.MIN_NODE_VERSION) >= 0);
+        assertTrue(DshUtil.compareVersion("22.18.9", DshStudioConstants.MIN_NODE_VERSION) < 0);
+        assertTrue(DshUtil.compareVersion("20.11.1", DshStudioConstants.MIN_NODE_VERSION) < 0);
+        assertTrue(DshUtil.compareVersion("18.20.4", DshStudioConstants.MIN_NODE_VERSION) < 0);
+    }
 }

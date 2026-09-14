@@ -67,6 +67,22 @@ public final class DshStudioConstants {
     public static final String DEFAULT_HEADLESS_COMMAND =
             "{dsh} --profile headless {task}";
 
+    /**
+     * 内置运行时（以及系统 dsh）要求的最低 Node.js 版本。
+     * <p>
+     * 依据：2026-09-14 从内置运行时里 553 个 {@code package.json} 的 {@code engines.node}
+     * 汇总取最大值 —— {@code undici@8.10.2}（被官方插件 {@code dsh-web-fetch-http} 依赖）
+     * 与 {@code @earendil-works/pi-ai@0.84.4}（被 {@code dsh-llm-pi-ai} 依赖）都声明
+     * {@code >= 22.19.0}，{@code commander@15}（被含 {@code dsh} 自身在内 5 个官方包依赖）
+     * 声明 {@code >= 22.12.0}。dsh 自身代码里没有任何版本校验，所以 {@code engines} 是唯一权威信号。
+     * <p>
+     * 注意 {@code engines} 只是包声明，低于此版本未必一定跑不起来，故插件只警告、不拦截。
+     */
+    public static final String MIN_NODE_VERSION = "22.19.0";
+
+    /** Node.js 官方下载页（缺 Node 时的引导入口）。 */
+    public static final String NODE_DOWNLOAD_URL = "https://nodejs.org/zh-cn/download";
+
     /** 从服务器启动输出中提取 launch token 的正则（dsh-web-app 会打印带 ?token=... 的根 URL）。 */
     public static final String TOKEN_REGEX = "[?&]token=([A-Za-z0-9._~+\\-]+)";
 

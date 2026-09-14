@@ -1,6 +1,7 @@
 package com.deepseek.dshstudio.server;
 
 import com.deepseek.dshstudio.DshStudioConstants;
+import com.deepseek.dshstudio.runtime.DshNodeChecker;
 import com.deepseek.dshstudio.runtime.DshRuntimeManager;
 import com.deepseek.dshstudio.runtime.DshRuntimeMode;
 import com.deepseek.dshstudio.settings.DshSettingsState;
@@ -23,7 +24,6 @@ import java.io.InputStreamReader;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * 项目级服务：管理 DeepSeek Harness web 服务器进程的启动 / 停止 / 健康探测 / 日志。
@@ -141,6 +141,26 @@ public final class DshServerManager {
             return;
         }
 
+        // 启动命令解析与 Node 前置检查也放在锁外：引导对话框是模态的，
+        // 占着 lock 会让状态栏、动作等其它线程干等。命令解析是纯函数，没有副作用。
+        List<String> command;
+        try {
+            command = DshUtil.resolveCommandLine(settings, project);
+        } catch (Exception e) {
+            appendLog("[dsh] 无法解析启动命令: " + e.getMessage() + "\n");
+            startAttempted = true;
+            setState(ServerState.FAILED);
+            return;
+        }
+        // 内置运行时与系统 npx 都是 Node 程序。缺 Node 或版本偏低时弹一次引导
+        // （只警告不拦截，用户选「继续尝试」就往下走）。已经能连上外部实例时不需要 Node。
+        if (!reachable && needsNode(command) && !DshNodeChecker.guideIfNeeded(project)) {
+            appendLog("[dsh] 已取消启动：Node.js 未就绪。\n");
+            startAttempted = true;
+            setState(ServerState.FAILED);
+            return;
+        }
+
         synchronized (lock) {
             if (reachable) {
                 startAttempted = false;
@@ -157,28 +177,6 @@ public final class DshServerManager {
                 return;
             }
             String workdir = DshUtil.resolveWorkingDirectory(settings, project);
-            List<String> command;
-            try {
-                command = DshUtil.resolveCommandLine(settings, project);
-            } catch (Exception e) {
-                appendLog("[dsh] 无法解析启动命令: " + e.getMessage() + "\n");
-                startAttempted = true;
-                setState(ServerState.FAILED);
-                return;
-            }
-            // 前置检查：内置运行时与系统 npx 都是 Node 程序，本机没有 Node.js 时
-            // 直接友好提示，不再盲目拉起进程
-            if (needsNode(command) && !DshUtil.isNodeAvailable()) {
-                appendLog("[dsh] 未检测到 Node.js。内置运行时与 npx 都需要 Node.js 才能运行。\n");
-                notifyBalloon("无法启动 DeepSeek Harness 服务器",
-                        "未检测到 Node.js。<br>" +
-                                "请先安装 Node.js 18+（<a href=\"https://nodejs.org\">https://nodejs.org</a>），" +
-                                "然后点击 ▶ 重试。",
-                        NotificationType.WARNING);
-                startAttempted = true;
-                setState(ServerState.FAILED);
-                return;
-            }
             try {
                 ProcessBuilder pb = new ProcessBuilder(command);
                 pb.directory(new File(workdir));
@@ -463,19 +461,10 @@ public final class DshServerManager {
 
     /**
      * 判断启动命令是否需要本机安装 Node.js。
-     * <p>
-     * 内置运行时走的是 {@code node .../lib/bin.js}，系统方式走 {@code npx}，
-     * 全局安装则是 {@code dsh} —— 三者都是 Node 程序，缺 Node 时启动必然失败。
+     * <p>实现已挪到 {@link DshNodeChecker#commandNeedsNode}（headless 动作也要用同一套判断）。
      */
     private static boolean needsNode(List<String> command) {
-        if (command == null || command.isEmpty()) {
-            return false;
-        }
-        String name = new File(command.get(0)).getName().toLowerCase(Locale.ROOT);
-        return name.equals("npx") || name.equals("npx.cmd")
-                || name.equals("npm") || name.equals("npm.cmd")
-                || name.equals("dsh") || name.equals("dsh.cmd")
-                || name.startsWith("node");
+        return DshNodeChecker.commandNeedsNode(command);
     }
 
     /** 从一行启动输出中提取 launch token（首次捕获即记下）。 */
