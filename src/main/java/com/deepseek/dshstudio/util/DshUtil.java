@@ -1,6 +1,8 @@
 package com.deepseek.dshstudio.util;
 
 import com.deepseek.dshstudio.DshStudioConstants;
+import com.deepseek.dshstudio.runtime.DshRuntimeManager;
+import com.deepseek.dshstudio.runtime.DshRuntimeMode;
 import com.deepseek.dshstudio.settings.DshSettingsState;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
@@ -38,6 +40,46 @@ public final class DshUtil {
 
     public static boolean isWindows() {
         return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+    }
+
+    /**
+     * 当前平台的标识，形如 {@code win32-x64} / {@code darwin-arm64} / {@code linux-x64}。
+     * <p>
+     * 与内置运行时打包时用的命名保持一致（npm 的 {@code os}/{@code cpu} 字段取值），
+     * 用来判断「内置运行时是否覆盖当前平台」。
+     */
+    public static String hostTarget() {
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+        String osName;
+        if (os.contains("win")) {
+            osName = "win32";
+        } else if (os.contains("mac") || os.contains("darwin")) {
+            osName = "darwin";
+        } else {
+            osName = "linux";
+        }
+        String cpuName;
+        switch (arch) {
+            case "amd64":
+            case "x86_64":
+                cpuName = "x64";
+                break;
+            case "aarch64":
+            case "arm64":
+                cpuName = "arm64";
+                break;
+            case "x86":
+            case "i386":
+            case "i486":
+            case "i586":
+            case "i686":
+                cpuName = "ia32";
+                break;
+            default:
+                cpuName = arch;
+        }
+        return osName + "-" + cpuName;
     }
 
     // ── 健康探测 ──────────────────────────────────────────────────────────
@@ -84,24 +126,64 @@ public final class DshUtil {
     /**
      * 构建服务器启动命令。
      * <p>
-     * 模板占位符：{host} {port} {workdir} {dshHome}。
-     * Windows 下自动把首个 npx/npm 解析为 npx.cmd 的完整路径（通过 where 查找）。
+     * 模板占位符：{host} {port} {workdir} {dshHome} 为纯文本替换；
+     * {dsh} 展开为「用哪一份 dsh 启动」的完整前缀（内置运行时 / 热更新版本 / 系统 npx），
+     * 由 {@link DshRuntimeManager} 按设置里的运行时来源决定。
      */
     public static List<String> resolveCommandLine(@NotNull DshSettingsState settings,
                                                   @Nullable Project project) {
-        String template = settings.normalizedServerCommand();
+        return resolveTemplate(settings.normalizedServerCommand(), settings, project);
+    }
+
+    /**
+     * 展开一个命令模板为参数列表。
+     * <p>
+     * {@code {dsh}} 展开后可能包含带空格的路径（{@code C:\Program Files\nodejs\node.exe}），
+     * 所以是按 token 拼接而不是字符串替换 —— 字符串替换后再分词会把路径拆断。
+     */
+    public static List<String> resolveTemplate(@NotNull String template,
+                                               @NotNull DshSettingsState settings,
+                                               @Nullable Project project) {
+        // 模板里没有 {dsh} 时完全不碰运行时解析：自定义命令不应被内置运行时的可用性牵连
+        if (!template.contains(DshStudioConstants.DSH_PLACEHOLDER)) {
+            return resolveTemplate(template, settings, project, List.of());
+        }
+        return resolveTemplate(template, settings, project, resolveDshPrefix(settings));
+    }
+
+    /**
+     * 展开模板，{@code {dsh}} 用调用方给定的前缀。
+     * <p>
+     * 单独把前缀抽出来是为了可测：单元测试里没有 IDE 应用环境，拿不到运行时服务。
+     */
+    public static List<String> resolveTemplate(@NotNull String template,
+                                               @NotNull DshSettingsState settings,
+                                               @Nullable Project project,
+                                               @NotNull List<String> dshPrefix) {
         String host = hostOf(settings.normalizedServerUrl());
         String port = String.valueOf(settings.startPort);
         String workdir = resolveWorkingDirectory(settings, project);
         String dshHome = settings.dshHome == null ? "" : settings.dshHome.trim();
 
-        template = template
+        String expanded = template
                 .replace("{host}", host)
                 .replace("{port}", port)
                 .replace("{workdir}", workdir)
                 .replace("{dshHome}", dshHome);
 
-        List<String> tokens = tokenize(template);
+        List<String> tokens = new ArrayList<>();
+        int from = 0;
+        while (true) {
+            int idx = expanded.indexOf(DshStudioConstants.DSH_PLACEHOLDER, from);
+            if (idx < 0) {
+                tokens.addAll(tokenize(expanded.substring(from)));
+                break;
+            }
+            tokens.addAll(tokenize(expanded.substring(from, idx)));
+            tokens.addAll(dshPrefix);
+            from = idx + DshStudioConstants.DSH_PLACEHOLDER.length();
+        }
+
         if (tokens.isEmpty()) {
             throw new IllegalStateException("启动命令为空");
         }
@@ -109,12 +191,19 @@ public final class DshUtil {
         return tokens;
     }
 
+    /** 按设置里的运行时来源解析 {@code {dsh}} 的展开结果。 */
+    @NotNull
+    public static List<String> resolveDshPrefix(@NotNull DshSettingsState settings) {
+        return DshRuntimeManager.getInstance()
+                .resolve(DshRuntimeMode.fromId(settings.runtimeMode)).prefix;
+    }
+
     /**
-     * 解析命令行的第一个 token：Windows 下将 npx/npm 解析为带 .cmd 的完整路径，
+     * 解析命令行的第一个 token：Windows 下将 npx/npm/dsh 解析为带 .cmd 的完整路径，
      * 以便 ProcessBuilder 直接执行；无法解析时原样返回（Java 在 Windows 上会经由
      * cmd.exe 执行 PATH 中的 .cmd/.bat）。
      */
-    private static String resolveLauncher(String first) {
+    public static String resolveLauncher(String first) {
         if (!isWindows()) {
             return first;
         }
@@ -124,6 +213,8 @@ public final class DshUtil {
             base = "npx";
         } else if (lower.equals("npm") || lower.equals("npm.cmd")) {
             base = "npm";
+        } else if (lower.equals("dsh") || lower.equals("dsh.cmd")) {
+            base = "dsh";
         } else {
             return first;
         }
@@ -368,15 +459,43 @@ public final class DshUtil {
     /** 检查本机是否安装了 Node.js/npx（用于启动服务器的提示信息）。 */
     public static boolean isNpxAvailable() {
         if (!isWindows()) {
-            try {
-                Process p = new ProcessBuilder("sh", "-c", "command -v npx").redirectErrorStream(true).start();
-                p.waitFor(3, TimeUnit.SECONDS);
-                return p.exitValue() == 0;
-            } catch (Exception e) {
-                return false;
-            }
+            return commandExists("npx");
         }
         return resolveOnPath("npx.cmd") != null || resolveOnPath("npx") != null;
+    }
+
+    /** 检查本机是否安装了 Node.js（内置运行时与 npx 启动都依赖它）。 */
+    public static boolean isNodeAvailable() {
+        if (!isWindows()) {
+            return commandExists("node");
+        }
+        return resolveOnPath("node.exe") != null || resolveOnPath("node") != null;
+    }
+
+    private static boolean commandExists(String name) {
+        try {
+            Process p = new ProcessBuilder("sh", "-c", "command -v " + name)
+                    .redirectErrorStream(true).start();
+            p.waitFor(3, TimeUnit.SECONDS);
+            return p.exitValue() == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 解析 node 可执行文件：Windows 上取 PATH 里的完整路径（避免落到 .cmd 转发），
+     * 其余平台交给 ProcessBuilder 按 PATH 查找。
+     */
+    public static String resolveNodeExecutable() {
+        if (isWindows()) {
+            String p = resolveOnPath("node.exe");
+            if (p == null || p.trim().isEmpty()) {
+                p = resolveOnPath("node");
+            }
+            return (p == null || p.trim().isEmpty()) ? "node.exe" : p.trim();
+        }
+        return "node";
     }
 
     /** 将任意目录字符串规范化为绝对路径（用于展示）。 */

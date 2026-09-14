@@ -1,6 +1,8 @@
 package com.deepseek.dshstudio.server;
 
 import com.deepseek.dshstudio.DshStudioConstants;
+import com.deepseek.dshstudio.runtime.DshRuntimeManager;
+import com.deepseek.dshstudio.runtime.DshRuntimeMode;
 import com.deepseek.dshstudio.settings.DshSettingsState;
 import com.deepseek.dshstudio.util.DshUtil;
 import com.intellij.notification.Notification;
@@ -10,6 +12,7 @@ import com.intellij.notification.NotificationType;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.util.text.StringUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -123,6 +126,21 @@ public final class DshServerManager {
      */
     public void startServer() {
         DshSettingsState settings = DshSettingsState.getInstance();
+
+        // 运行时准备刻意放在锁外：首次使用需要解包内置运行时（80 MB / 1.8 万文件，
+        // 可能几十秒并弹出进度框），期间不该占着 lock 让其它线程干等。
+        try {
+            DshRuntimeManager.getInstance()
+                    .prepare(project, DshRuntimeMode.fromId(settings.runtimeMode));
+        } catch (Exception e) {
+            String reason = String.valueOf(e.getMessage());
+            appendLog("[dsh] 运行时准备失败: " + reason + "\n");
+            notifyBalloon("无法启动 DeepSeek Harness 服务器",
+                    StringUtil.escapeXmlEntities(reason), NotificationType.WARNING);
+            setState(ServerState.FAILED);
+            return;
+        }
+
         synchronized (lock) {
             if (reachable) {
                 startAttempted = false;
@@ -148,14 +166,14 @@ public final class DshServerManager {
                 setState(ServerState.FAILED);
                 return;
             }
-            // 前置检查：默认使用 npx 启动，但本机没有 Node.js → 直接友好提示，不再盲目拉起进程
-            if (usesNpxLauncher(command) && !DshUtil.isNpxAvailable()) {
-                appendLog("[dsh] 未检测到 Node.js / npx。请先安装 Node.js 18+（https://nodejs.org），"
-                        + "或在 设置 → DeepSeek Harness 中自定义启动命令。\n");
+            // 前置检查：内置运行时与系统 npx 都是 Node 程序，本机没有 Node.js 时
+            // 直接友好提示，不再盲目拉起进程
+            if (needsNode(command) && !DshUtil.isNodeAvailable()) {
+                appendLog("[dsh] 未检测到 Node.js。内置运行时与 npx 都需要 Node.js 才能运行。\n");
                 notifyBalloon("无法启动 DeepSeek Harness 服务器",
-                        "未检测到 Node.js / npx。<br>" +
+                        "未检测到 Node.js。<br>" +
                                 "请先安装 Node.js 18+（<a href=\"https://nodejs.org\">https://nodejs.org</a>），" +
-                                "然后点击 ▶ 重试；<br>或在 设置 → DeepSeek Harness 中自定义启动命令。",
+                                "然后点击 ▶ 重试。",
                         NotificationType.WARNING);
                 startAttempted = true;
                 setState(ServerState.FAILED);
@@ -227,8 +245,8 @@ public final class DshServerManager {
                 });
             } catch (IOException e) {
                 appendLog("[dsh] 启动失败: " + e.getMessage() + "\n");
-                if (!DshUtil.isNpxAvailable()) {
-                    appendLog("[dsh] 提示：未检测到 Node.js / npx。请安装 Node.js 18+，或在设置中自定义启动命令。\n");
+                if (!DshUtil.isNodeAvailable()) {
+                    appendLog("[dsh] 提示：未检测到 Node.js。请安装 Node.js 18+，或在设置中自定义启动命令。\n");
                 }
                 notifyBalloon("启动 DeepSeek Harness 服务器失败",
                         "无法执行启动命令，详见工具窗口的 Server Log 面板。<br>" +
@@ -443,13 +461,21 @@ public final class DshServerManager {
         fireLog(chunk);
     }
 
-    /** 判断启动命令是否基于 npx（用于前置检测 Node.js 是否可用）。 */
-    private static boolean usesNpxLauncher(List<String> command) {
+    /**
+     * 判断启动命令是否需要本机安装 Node.js。
+     * <p>
+     * 内置运行时走的是 {@code node .../lib/bin.js}，系统方式走 {@code npx}，
+     * 全局安装则是 {@code dsh} —— 三者都是 Node 程序，缺 Node 时启动必然失败。
+     */
+    private static boolean needsNode(List<String> command) {
         if (command == null || command.isEmpty()) {
             return false;
         }
         String name = new File(command.get(0)).getName().toLowerCase(Locale.ROOT);
-        return name.equals("npx") || name.equals("npx.cmd");
+        return name.equals("npx") || name.equals("npx.cmd")
+                || name.equals("npm") || name.equals("npm.cmd")
+                || name.equals("dsh") || name.equals("dsh.cmd")
+                || name.startsWith("node");
     }
 
     /** 从一行启动输出中提取 launch token（首次捕获即记下）。 */

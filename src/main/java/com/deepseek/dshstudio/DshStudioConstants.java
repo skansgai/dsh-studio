@@ -19,13 +19,23 @@ public final class DshStudioConstants {
     public static final int DEFAULT_PORT = 3080;
 
     /**
-     * 自动启动服务器的默认命令模板；支持占位符 {host} {port} {workdir} {dshHome}。
+     * 命令模板里代表「用哪一份 dsh 启动」的占位符。
+     * <p>
+     * 展开结果由设置里的「运行时来源」决定：
+     * 内置运行时 → {@code node <运行时>/node_modules/@deepseek-ai/dsh/lib/bin.js}；
+     * 系统 dsh → {@code npx --yes @deepseek-ai/dsh}。
+     * 写成占位符而不是写死 npx，是为了让用户在自定义模板里也能享受内置运行时。
+     */
+    public static final String DSH_PLACEHOLDER = "{dsh}";
+
+    /**
+     * 自动启动服务器的默认命令模板；支持占位符 {dsh} {host} {port} {workdir} {dshHome}。
      * <p>
      * {@code --no-open} 是必要的：dsh web 启动后默认会调起系统默认浏览器打开页面，
      * 而本插件把页面嵌在 JCEF 里，再弹一个系统浏览器窗口纯属打扰。
      */
     public static final String DEFAULT_SERVER_COMMAND =
-            "npx --yes @deepseek-ai/dsh web --host {host} --port {port} --no-open";
+            "{dsh} web --host {host} --port {port} --no-open";
 
     /** 健康检查超时（毫秒）。 */
     public static final int HEALTH_TIMEOUT_MS = 1500;
@@ -53,9 +63,9 @@ public final class DshStudioConstants {
     /** 等待服务器就绪的最长时间（毫秒），用于"发送代码"前确保服务器可用。 */
     public static final int API_WAIT_SERVER_MS = 90_000;
 
-    /** headless 一次性任务的默认命令模板；支持 {task} {workdir} {dshHome}。 */
+    /** headless 一次性任务的默认命令模板；支持 {dsh} {task} {workdir} {dshHome}。 */
     public static final String DEFAULT_HEADLESS_COMMAND =
-            "npx --yes @deepseek-ai/dsh --profile headless {task}";
+            "{dsh} --profile headless {task}";
 
     /** 从服务器启动输出中提取 launch token 的正则（dsh-web-app 会打印带 ?token=... 的根 URL）。 */
     public static final String TOKEN_REGEX = "[?&]token=([A-Za-z0-9._~+\\-]+)";

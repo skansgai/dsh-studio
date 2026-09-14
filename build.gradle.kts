@@ -8,6 +8,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.time.Duration
+import java.time.Instant
 import java.util.Base64
 import java.util.Properties
 import java.util.zip.GZIPInputStream
@@ -335,6 +336,15 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
     @get:OutputFile
     abstract val outputZip: RegularFileProperty
 
+    /**
+     * 运行时元数据（与 zip 并列打进 JAR）。
+     *
+     * 插件侧只读这一个小文件就能知道「内置的是哪个 dsh、要不要重新解包」，
+     * 不必去解 80 MB 的 zip。`stamp` 是 zip 内容的 sha256 前缀，内容一变就变。
+     */
+    @get:OutputFile
+    abstract val outputMeta: RegularFileProperty
+
     @get:Inject
     abstract val execOps: ExecOperations
 
@@ -550,6 +560,8 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
         zip.parentFile.mkdirs()
         zip.delete()
         val mergedPath = merged.toPath()
+        var entryCount = 0
+        var unpackedBytes = 0L
         ZipOutputStream(zip.outputStream().buffered()).use { zos ->
             Files.walk(mergedPath).use { stream ->
                 stream.filter { Files.isRegularFile(it) }
@@ -561,11 +573,46 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
                         zos.putNextEntry(ZipEntry(entryName))
                         Files.newInputStream(p).use { it.copyTo(zos) }
                         zos.closeEntry()
+                        entryCount++
+                        unpackedBytes += Files.size(p)
                     }
             }
         }
+
+        // ── 6. 元数据 ────────────────────────────────────────────────────
+        // 插件侧解包前先读它：stamp 与本地已解包目录一致就跳过，避免每次启动都碰 80 MB 的 zip。
+        // stamp 取 zip 内容的 sha256 前缀 —— 版本、目标平台、sharp 模式、裁剪规则任一变化都会
+        // 产生新 stamp，从而解包到新目录，旧目录可安全清理。
+        val digest = MessageDigest.getInstance("SHA-256")
+        zip.inputStream().use { input ->
+            val buf = ByteArray(1 shl 16)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                digest.update(buf, 0, n)
+            }
+        }
+        val stamp = digest.digest().joinToString("") { "%02x".format(it) }.take(8)
+        val meta = buildString {
+            append("{\n")
+            append("  \"dshVersion\": \"$version\",\n")
+            append("  \"stamp\": \"$stamp\",\n")
+            append("  \"sharp\": \"${sharpMode.get()}\",\n")
+            append("  \"targets\": [${platformTargets.joinToString(", ") { "\"$it\"" }}],\n")
+            append("  \"entries\": $entryCount,\n")
+            append("  \"unpackedBytes\": $unpackedBytes,\n")
+            append("  \"builtAt\": \"${Instant.now()}\"\n")
+            append("}\n")
+        }
+        val metaFile = outputMeta.get().asFile
+        metaFile.parentFile.mkdirs()
+        metaFile.writeText(meta)
+
         logger.lifecycle(
-            "[dsh-runtime] 完成：${zip.absolutePath}（%.1f MB）".format(zip.length() / 1024.0 / 1024.0)
+            "[dsh-runtime] 完成：${zip.absolutePath}（%.1f MB，$entryCount 个文件，" +
+                "解包后 %.1f MB，stamp $stamp）".format(
+                    zip.length() / 1024.0 / 1024.0, unpackedBytes / 1024.0 / 1024.0
+                )
         )
     }
 
@@ -1068,6 +1115,7 @@ val dshRuntimeTargets: List<String> =
         .filter { it.isNotEmpty() }
 
 val dshRuntimeZip = layout.buildDirectory.file("dsh-runtime/dsh-runtime.zip")
+val dshRuntimeMeta = layout.buildDirectory.file("dsh-runtime/runtime-meta.json")
 
 /**
  * npm 的启动命令。
@@ -1100,13 +1148,19 @@ val bundleDshRuntime = tasks.register<BundleDshRuntimeTask>("bundleDshRuntime") 
     sharpMode.set(providers.gradleProperty("dsh.runtime.sharp").orElse("native"))
     workDir.set(layout.buildDirectory.dir("dsh-runtime/work"))
     outputZip.set(dshRuntimeZip)
+    outputMeta.set(dshRuntimeMeta)
 }
 
-// 把运行时 zip 作为资源打进 JAR：JAR 里只多一个条目，避免上万个小文件拖慢构建与加载。
+// 把运行时 zip 与元数据作为资源打进 JAR：JAR 里只多两个条目，
+// 避免上万个小文件拖慢构建与加载。
 tasks.named<ProcessResources>("processResources") {
     dependsOn(bundleDshRuntime)
     from(dshRuntimeZip) {
         into("dsh-runtime")
         rename { "dsh-runtime.zip" }
+    }
+    from(dshRuntimeMeta) {
+        into("dsh-runtime")
+        rename { "runtime-meta.json" }
     }
 }

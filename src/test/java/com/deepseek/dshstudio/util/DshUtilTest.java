@@ -45,7 +45,11 @@ public class DshUtilTest {
         settings.startPort = 8080;
         settings.serverCommand = "";
 
-        List<String> command = DshUtil.resolveCommandLine(settings, null);
+        // 默认模板里的 {dsh} 由运行时服务展开，这里注入一个固定的系统前缀，
+        // 避免单元测试依赖 IDE 应用环境。
+        List<String> command = DshUtil.resolveTemplate(
+                settings.normalizedServerCommand(), settings, null,
+                List.of("npx", "--yes", "@deepseek-ai/dsh"));
         assertFalse(command.isEmpty());
         // 默认模板应包含 dsh 子命令与端口
         String joined = String.join(" ", command);
@@ -54,16 +58,40 @@ public class DshUtilTest {
         assertTrue(joined.contains("8080"));
         assertTrue(joined.contains("--host"));
         assertTrue(joined.contains("127.0.0.1"));
+        assertTrue(joined.contains("--no-open"));
     }
 
     @Test
-    public void resolveCommandLineSubstitutesPlaceholders() {
+    public void defaultTemplatesUseDshPlaceholder() {
+        assertTrue(DshStudioConstants.DEFAULT_SERVER_COMMAND.startsWith("{dsh} "));
+        assertTrue(DshStudioConstants.DEFAULT_HEADLESS_COMMAND.startsWith("{dsh} "));
+    }
+
+    @Test
+    public void dshPrefixKeepsPathsWithSpacesIntact() {
+        DshSettingsState settings = new DshSettingsState();
+        // 内置运行时的展开结果含带空格的路径，必须按 token 拼接而不是字符串替换
+        List<String> command = DshUtil.resolveTemplate(
+                "{dsh} web --port {port}", settings, null,
+                List.of("C:\\Program Files\\nodejs\\node.exe",
+                        "C:\\Users\\a b\\runtime\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js"));
+        assertEquals(5, command.size());
+        assertEquals("C:\\Program Files\\nodejs\\node.exe", command.get(0));
+        assertEquals("C:\\Users\\a b\\runtime\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js", command.get(1));
+        assertEquals("web", command.get(2));
+        assertEquals("--port", command.get(3));
+        assertEquals(String.valueOf(settings.startPort), command.get(4));
+    }
+
+    @Test
+    public void templateWithoutDshPlaceholderIsUntouched() {
         DshSettingsState settings = new DshSettingsState();
         settings.serverCommand = "echo {host} {port} {dshHome}";
         settings.serverUrl = "http://192.168.1.5:9999";
         settings.startPort = 9999;
         settings.dshHome = "D:/dsh-home";
 
+        // 不含 {dsh} 的模板不触碰运行时服务，纯文本替换
         List<String> command = DshUtil.resolveCommandLine(settings, null);
         assertEquals("echo", command.get(0));
         assertEquals("192.168.1.5", command.get(1));

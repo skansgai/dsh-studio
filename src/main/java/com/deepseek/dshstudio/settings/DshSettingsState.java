@@ -20,8 +20,23 @@ public final class DshSettingsState implements PersistentStateComponent<DshSetti
     /** 自动启动服务器时使用的端口（与默认命令模板中的 {port} 对应）。 */
     public int startPort = DshStudioConstants.DEFAULT_PORT;
 
-    /** 自定义启动命令模板；留空使用默认模板。支持 {host} {port} {workdir} {dshHome}。 */
+    /** 自定义启动命令模板；留空使用默认模板。支持 {dsh} {host} {port} {workdir} {dshHome}。 */
     public String serverCommand = "";
+
+    /**
+     * 运行时来源：auto（优先内置运行时）/ bundled（仅内置）/ system（仅系统 dsh）。
+     * <p>
+     * 仅当启动命令模板里含 {dsh} 占位符时才有意义（默认模板含）。
+     */
+    public String runtimeMode = "auto";
+
+    /**
+     * 内置运行时的解包位置：auto（Windows 用系统临时目录，其余用用户目录）/ temp / home。
+     * <p>
+     * 企业安全软件会按路径范围做透明加密，临时目录通常被排除在外，解包快两个数量级。
+     * 详见 {@code DshRuntimeLocation}。
+     */
+    public String runtimeLocation = "auto";
 
     /** 服务器工作目录；留空则使用当前项目目录。 */
     public String workingDirectory = "";
@@ -68,6 +83,8 @@ public final class DshSettingsState implements PersistentStateComponent<DshSetti
         this.serverUrl = state.serverUrl;
         this.startPort = state.startPort;
         this.serverCommand = state.serverCommand;
+        this.runtimeMode = state.runtimeMode == null ? "auto" : state.runtimeMode;
+        this.runtimeLocation = state.runtimeLocation == null ? "auto" : state.runtimeLocation;
         this.workingDirectory = state.workingDirectory;
         this.dshHome = state.dshHome;
         this.autoStartServer = state.autoStartServer;

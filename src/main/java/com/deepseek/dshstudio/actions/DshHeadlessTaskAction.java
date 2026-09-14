@@ -1,6 +1,8 @@
 package com.deepseek.dshstudio.actions;
 
 import com.deepseek.dshstudio.DshStudioConstants;
+import com.deepseek.dshstudio.runtime.DshRuntimeManager;
+import com.deepseek.dshstudio.runtime.DshRuntimeMode;
 import com.deepseek.dshstudio.server.DshServerManager;
 import com.deepseek.dshstudio.settings.DshSettingsState;
 import com.deepseek.dshstudio.util.DshUtil;
@@ -68,9 +70,25 @@ public final class DshHeadlessTaskAction extends AnAction {
         DshSettingsState settings = DshSettingsState.getInstance();
         String workdir = DshUtil.resolveWorkingDirectory(settings, project);
 
+        // 与启动服务器走同一条运行时准备路径（首次可能需要解包内置运行时）
+        try {
+            DshRuntimeManager.getInstance()
+                    .prepare(project, DshRuntimeMode.fromId(settings.runtimeMode));
+        } catch (Exception ex) {
+            showNotification(project, "无法准备 dsh 运行时", String.valueOf(ex.getMessage()),
+                    NotificationType.ERROR);
+            return;
+        }
+        if (!DshUtil.isNodeAvailable()) {
+            showNotification(project, "未检测到 Node.js",
+                    "dsh 需要 Node.js 才能运行。请先安装 Node.js 18+（https://nodejs.org）。",
+                    NotificationType.WARNING);
+            return;
+        }
+
         List<String> command;
         try {
-            command = resolveCommand(task, workdir);
+            command = resolveCommand(project, task);
         } catch (Exception ex) {
             showNotification(project, "无法构建 headless 命令", ex.getMessage(), NotificationType.ERROR);
             return;
@@ -126,47 +144,21 @@ public final class DshHeadlessTaskAction extends AnAction {
                 .notify(project);
     }
 
-    /** 基于 {task} {workdir} {dshHome} 占位符解析 headless 命令；首 token 在 Windows 上解析为 .cmd 完整路径。 */
-    private static List<String> resolveCommand(String task, String workdir) {
+    /**
+     * 基于 {dsh} {task} {workdir} {dshHome} 占位符解析 headless 命令。
+     * <p>
+     * {dsh} 由 DshUtil 按设置里的运行时来源展开（内置运行时 / 热更新版本 / 系统 npx）。
+     */
+    private static List<String> resolveCommand(Project project, String task) {
         DshSettingsState settings = DshSettingsState.getInstance();
-        String dshHome = settings.dshHome == null ? "" : settings.dshHome.trim();
         String template = DshStudioConstants.DEFAULT_HEADLESS_COMMAND
-                .replace("{task}", quoteForTemplate(task))
-                .replace("{workdir}", workdir)
-                .replace("{dshHome}", dshHome);
-        List<String> tokens = DshUtil.tokenize(template);
-        if (tokens.isEmpty()) {
-            throw new IllegalStateException("headless 命令为空");
-        }
-        tokens.set(0, resolveLauncher(tokens.get(0)));
-        return tokens;
+                .replace("{task}", quoteForTemplate(task));
+        return DshUtil.resolveTemplate(template, settings, project);
     }
 
     /** 任务文本作为单个参数传递：用双引号包裹（tokenize 支持引号）。 */
     private static String quoteForTemplate(String task) {
         return "\"" + task.replace("\"", "'") + "\"";
-    }
-
-    /** Windows 下把 npx/npm 解析为带 .cmd 的完整路径（与 DshUtil.resolveCommandLine 行为一致）。 */
-    private static String resolveLauncher(String first) {
-        if (!DshUtil.isWindows()) {
-            return first;
-        }
-        String lower = first.toLowerCase(java.util.Locale.ROOT);
-        String base;
-        if (lower.endsWith(".cmd")) {
-            base = lower.substring(0, lower.length() - 4);
-        } else {
-            base = lower;
-        }
-        if (!base.equals("npx") && !base.equals("npm") && !base.equals("dsh")) {
-            return first;
-        }
-        String resolved = DshUtil.resolveOnPath(base + ".cmd");
-        if (resolved != null && !resolved.trim().isEmpty()) {
-            return resolved.trim();
-        }
-        return base + ".cmd";
     }
 
     private static void notify(Project project, String title, @Nullable String content, NotificationType type) {
