@@ -3,11 +3,11 @@ package com.deepseek.dshstudio.runtime;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * 内置运行时的解包位置。
+ * 运行时（下载后）的解包位置。
  * <p>
  * 做成可配是因为企业安全软件（DLP，如 E-SafeNet）会按**路径范围**做透明加密：
  * 在它的范围内写一个小文件要 ~85 ms，实测只有 11 个/秒；而系统临时目录被排除在外，
- * 实测 2500 个/秒。内置运行时有 1.8 万个文件，两者相差 **27 分钟 vs 6 秒**。
+ * 实测 2500 个/秒。运行时包有 1.8 万个文件，两者相差 **27 分钟 vs 6 秒**。
  * 见 {@code docs/design-bundled-runtime.md} 的实测表。
  */
 public enum DshRuntimeLocation {

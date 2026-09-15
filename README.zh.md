@@ -59,7 +59,7 @@ DeepSeek Harness 是 DeepSeek 的开源编码智能体框架；`dsh web` 会在�
 
 ### 0.2.0 新功能使用方式
 
-- **发送代码到 Harness**：在编辑器里选中一段代码（不选中则发送整个文件），右键 → `DeepSeek Harness → Send Code to Harness…`。弹窗里可编辑附带给 agent 的指令，点 OK 后插件会确保服务器在运行、把代码作为 prompt 提交到 Harness 会话，并自动打开工具窗口。插件**内置了 dsh 运行时**（含 Windows / macOS / Linux 五个平台），首次使用只需把内置包解压到本地（Windows 解压到系统临时目录，macOS / Linux 解压到 `~/.dshstudio/runtime`），**不需要联网下载、也不会触发 `npx`**；通常几秒到几十秒，期间状态栏显示“启动中”属正常。之后可以在 `Settings → Tools → DeepSeek Harness` 里检查 dsh 的新版本并按需下载（只下当前平台，约 41 MB）。
+- **发送代码到 Harness**：在编辑器里选中一段代码（不选中则发送整个文件），右键 → `DeepSeek Harness → Send Code to Harness…`。弹窗里可编辑附带给 agent 的指令，点 OK 后插件会确保服务器在运行、把代码作为 prompt 提交到 Harness 会话，并自动打开工具窗口。插件**不再内置 dsh 运行时**（插件包保持约 167 KB），首次使用会**下载当前平台的运行时包**（约 41 MB，来自本仓库的 GitHub Releases），校验 sha256 后再原子解包到本地（Windows 解压到系统临时目录，macOS / Linux 解压到 `~/.dshstudio/runtime`），**不需要预装 `npx` 大包**；通常几秒到几十秒，期间状态栏显示“启动中”属正常。之后可以在 `Settings → Tools → DeepSeek Harness` 里检查 dsh 的新版本并按需下载（只下当前平台，约 41 MB）。
 
 ### 0.3.0 新功能使用方式
 
@@ -170,7 +170,7 @@ gradlew.bat test           # 单元测试（DshUtil 纯逻辑）
 
 ## 常见问题
 
-- **启动失败 / 状态红色**：打开 “Server Log” 标签页查看 `dsh web` 输出；插件也会弹出通知提示。常见原因：Node.js 未安装（点击 ▶ 时会直接弹窗提示并给出下载地址）、端口被占用（可改“自动启动端口”）、`npx` 不在 PATH、网络原因导致首次下载 `@deepseek-ai/dsh` 失败。
+- **启动失败 / 状态红色**：打开 “Server Log” 标签页查看 `dsh web` 输出；插件也会弹出通知提示。常见原因：Node.js 未安装（点击 ▶ 时会直接弹窗提示并给出下载地址）、端口被占用（可改“自动启动端口”）、`npx` 不在 PATH、网络原因导致首次下载 dsh 运行时包失败。
 - **提示“无法停止外部服务器”**：当前地址上的实例不是你通过本插件启动的（比如 Harness 已在终端里运行）。直接在对应终端停止即可。
 - **多个项目同时自动启动**：同一端口只允许一个实例；建议只在一个项目里启用“自动启动”，或为不同项目配置不同端口。
 - **连接局域网 / 远程实例**：把“服务器地址”改为目标地址即可连接；若 Harness 服务端未把该来源加入受信列表（`--trusted-host`），界面中的 `/api` 调用可能被拒绝，需在启动 Harness 时配置。

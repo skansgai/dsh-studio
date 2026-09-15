@@ -24,14 +24,14 @@ public final class DshSettingsState implements PersistentStateComponent<DshSetti
     public String serverCommand = "";
 
     /**
-     * 运行时来源：auto（优先内置运行时）/ bundled（仅内置）/ system（仅系统 dsh）。
+     * 运行时来源：auto（优先已下载运行时，首次启动自动下载当前平台包）/ system（仅系统 dsh）。
      * <p>
      * 仅当启动命令模板里含 {dsh} 占位符时才有意义（默认模板含）。
      */
     public String runtimeMode = "auto";
 
     /**
-     * 内置运行时的解包位置：auto（Windows 用系统临时目录，其余用用户目录）/ temp / home。
+     * 运行时（下载后）的解包位置：auto（Windows 用系统临时目录，其余用用户目录）/ temp / home。
      * <p>
      * 企业安全软件会按路径范围做透明加密，临时目录通常被排除在外，解包快两个数量级。
      * 详见 {@code DshRuntimeLocation}。
