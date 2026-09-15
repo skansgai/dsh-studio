@@ -24,7 +24,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.3.1"
+version = "0.4.0"
 
 repositories {
     mavenCentral()
@@ -90,6 +90,11 @@ dependencies {
                 providers.gradleProperty("dsh.ide.version").orElse("2024.2.3")
             )
         }
+        // Marketplace 的 ZIP 签名器，signPlugin 依赖它。**必须显式声明**：
+        // 不声明时 signPlugin 会直接失败（"No Marketplace ZIP Signer executable found"），
+        // 而 buildPlugin 照常成功 —— 于是很容易以为「构建没问题」，
+        // 到上传时才发现在市场上传不了签名包。
+        zipSigner()
     }
     testImplementation("junit:junit:4.13.2")
 }
@@ -112,6 +117,23 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
+            <h3>0.4.0</h3>
+            <ul>
+              <li><b>内置 dsh 运行时，开箱即用</b>：插件自带裁剪过的 dsh（含全部 Node 依赖），首次使用时在本地解包即可运行，
+                  不再需要 <code>npx --yes @deepseek-ai/dsh</code> 现下 284MB、等十几分钟。一次打包覆盖
+                  Windows x64 / macOS（Intel、Apple Silicon）/ Linux（x64、arm64）五个平台。
+                  解包位置默认在系统临时目录（用户目录与项目目录在本机被透明加密，写 1.8 万个小文件要慢约 200 倍），
+                  可在「设置 → 工具 → DeepSeek Harness → 运行时」里改。</li>
+              <li><b>运行时热更新</b>：设置页可检查 dsh 新版本，发现后<b>先问再下</b>（约 41MB，只含本机平台），
+                  sha256 校验通过后才原子安装，下次启动服务器生效。想回滚把「运行时来源」改成「仅内置运行时」即可，
+                  不需要额外机制。安装中途断网或被打断不会留下半个版本目录骗过下一次启动。</li>
+              <li><b>Node.js 探测与引导</b>：启动前检测 Node.js，低于依赖包 <code>engines</code> 声明的最低版本时
+                  给出提示与安装指引（只提示、不拦截）。</li>
+              <li><b>打包加固</b>：构建时逐条校验运行时包内文件的明文（本机透明加密会在打包时混进密文，
+                  那种包发到用户机器上 node 读到的是密文、原生模块加载不了），命中直接让构建失败；
+                  构建工作目录也移出了加密范围，同一个打包任务从 90+ 分钟降到约 4 分钟。</li>
+              <li><b>修复</b>：<code>overlay.js</code> 改名为 <code>overlay.js.txt</code>，避免被透明加密后误提交成密文。</li>
+            </ul>
             <h3>0.3.1</h3>
             <ul>
               <li><b>适配 dsh 0.1.2-rc.1 的启动令牌鉴权</b>：新版 dsh 的首页必须带 <code>?token=</code> 才能打开，
