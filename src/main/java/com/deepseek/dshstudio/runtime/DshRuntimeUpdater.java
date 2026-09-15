@@ -42,9 +42,9 @@ import java.util.stream.Stream;
  *       （{@code target} 形如 {@code win32-x64}）。</li>
  * </ul>
  * <p>
- * 下载的包解到 {@code <运行时根>/<dshVersion>/}，与内置基线（{@code baseline-<stamp>/}）
- * 并列。{@link DshRuntimeManager#resolve} 在自动模式下优先用热更新版本，而「仅内置」模式
- * 就是它的回滚出口 —— 所以回滚不需要任何额外机制，改一下设置即可。
+ * 下载的包解到 {@code <运行时根>/<dshVersion>/}，是插件唯一的运行时来源（已无内置基线）。
+ * {@link DshRuntimeManager#resolve} 在自动模式下用它；想回滚把「运行时来源」改成
+ * 「仅系统 dsh」即可，不需要任何额外机制。
  */
 public final class DshRuntimeUpdater {
 
@@ -265,7 +265,7 @@ public final class DshRuntimeUpdater {
             try (InputStream in = Files.newInputStream(zip)) {
                 DshRuntimeManager.extractZip(in, staging, metaInt(meta, "entries"), indicator);
             }
-            // 和内置基线走同一套自检：入口存在、不是 DLP 密文、是合法 UTF-8、以 #! 开头
+            // 解包后走统一自检：入口存在、不是 DLP 密文、是合法 UTF-8、以 #! 开头
             DshRuntimeManager.verifyExtractedTree(staging);
             Files.writeString(staging.resolve(DshRuntimeManager.UNPACK_MARKER), actual,
                     StandardCharsets.UTF_8);
@@ -339,7 +339,7 @@ public final class DshRuntimeUpdater {
      */
     static boolean isSafeVersion(@NotNull String version) {
         // 空串必须单独挡：`root.resolve("")` 返回的是 root 本身，不是 root 下的某个子目录。
-        // 放过去的话 removeVersionAt 会把**整个运行时根**（含内置基线和所有已装版本）删掉，
+        // 放过去的话 removeVersionAt 会把**整个运行时根**（含所有已装版本）删掉，
         // installInto 会把版本内容直接解到根目录里。
         if (version.isEmpty()) {
             return false;

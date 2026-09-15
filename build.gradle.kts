@@ -313,22 +313,23 @@ tasks {
 // dsh 运行时打包（bundleDshRuntime：产物供 Release 离线包与 CI，不再打进 JAR）
 // ════════════════════════════════════════════════════════════════════════════
 //
-// 为什么：现在首次启动靠 `npx --yes @deepseek-ai/dsh` 现拉，实测要下约 284 MB、
-// 耗时十几分钟，试用转化基本被吃掉。竞品 33555 内置运行时（40.7 MB）后体验是「秒开」。
+// 为什么保留这个任务：0.4.2 起插件不再内置运行时（首次启动改为按平台下载），
+// 但 CI（runtime-release.yml）仍要它产出 Release 上的运行时包，所以任务保留，
+// 只是不再被 processResources 引用、不再进插件 JAR。
 //
 // 实测（2026-09-11）：dsh 依赖闭包 457 个包 / 210.7 MB，压缩 54.6 MB；
 // 裁掉 sourcemap、`.d.ts`、文档、测试后压到 35.5 MB —— 与竞品基本持平，
 // 远低于 Marketplace 400 MB 上限。详见 docs/design-bundled-runtime.md。
 //
-// 产物：build/dsh-runtime/dsh-runtime.zip，被打进 JAR 的 dsh-runtime/ 下，
-//       插件首次运行时解包到用户目录使用（Java 侧在后续里程碑实现）。
+// 产物：build/dsh-runtime/dsh-runtime.zip（默认 5 平台合一），由 CI 上传到 Release；
+//       插件首次启动时按平台下载并解包到本地运行时目录。
 //
 // 可选配置（gradle.properties 或 -P）：
-//   dsh.runtime.version   内置的 dsh 版本，默认见下方（与插件版本解耦）
+//   dsh.runtime.version   打包的 dsh 版本，默认见下方（与插件版本解耦）
 //   dsh.runtime.targets   目标平台，逗号分隔，默认覆盖 5 个主流平台
 //   dsh.runtime.node      node 可执行文件，默认 PATH 里的 node
 //   dsh.runtime.npm       npm 可执行文件，默认 PATH 里的 npm
-//   dsh.runtime.skip      true 则跳过打包（产物里不带内置运行时）
+//   dsh.runtime.skip      true 则跳过打包
 
 /**
  * 把 dsh 运行时按平台解析、合并、裁剪、校验后打成一个 zip。
@@ -379,7 +380,7 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
     /**
      * 运行时元数据（与 zip 并列打进 JAR）。
      *
-     * 插件侧只读这一个小文件就能知道「内置的是哪个 dsh、要不要重新解包」，
+     * 插件侧只读这一个小文件就能知道「包内是哪个 dsh、要不要重新下载」，
      * 不必去解 80 MB 的 zip。`stamp` 是 zip 内容的 sha256 前缀，内容一变就变。
      */
     @get:OutputFile
@@ -581,7 +582,7 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
         }
         val printed = versionOut.toString(Charsets.UTF_8.name()).trim()
         check(printed.contains(version)) {
-            "内置运行时自检失败：期望版本 $version，实际输出「$printed」"
+            "运行时包自检失败：期望版本 $version，实际输出「$printed」"
         }
 
         val dumpOut = ByteArrayOutputStream()
@@ -598,7 +599,7 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
         val dump = dumpOut.toString(Charsets.UTF_8.name())
         val dumpLines = dump.lines().size
         check(dumpLines > 100 && dump.contains("@deepseek-ai/dsh-base")) {
-            "内置运行时自检失败：web profile 组合异常（输出 $dumpLines 行）\n" +
+            "运行时包自检失败：web profile 组合异常（输出 $dumpLines 行）\n" +
                 dump.take(2000)
         }
         logger.lifecycle(
@@ -737,7 +738,7 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
         return digest.digest().joinToString("") { "%02x".format(it) }.take(8)
     }
 
-    /** 写运行时元数据；插件侧靠它判断「内置/已下载的是哪个 dsh、要不要重新解包」。返回 stamp。 */
+    /** 写运行时元数据；插件侧靠它判断「包内是哪个 dsh、要不要重新下载」。返回 stamp。 */
     private fun writeMeta(
         metaFile: File,
         zip: File,
@@ -898,7 +899,7 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
         }
 
         check(problems.isEmpty()) {
-            "内置运行时平台完整性校验失败（共 ${problems.size} 项）：\n" +
+            "运行时包平台完整性校验失败（共 ${problems.size} 项）：\n" +
                 problems.joinToString("\n") +
                 "\n多半是某个平台的依赖没装全；用 -Pdsh.runtime.refresh=true 重跑可强制重装。"
         }
@@ -1031,7 +1032,7 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
             val actual = Base64.getEncoder()
                 .encodeToString(MessageDigest.getInstance("SHA-512").digest(payload))
             check(actual == integrity.removePrefix("sha512-")) {
-                "内置运行时下载校验失败（sha512 不匹配）：$url"
+                "运行时包下载校验失败（sha512 不匹配）：$url"
             }
         }
 
@@ -1386,7 +1387,7 @@ val dshRuntimeNpmCommand: List<String> =
 val bundleDshRuntime = tasks.register<BundleDshRuntimeTask>("bundleDshRuntime") {
     group = "build"
     description = "打包 dsh 运行时（产物供 GitHub Release 离线包与 CI 使用，不再打进插件 JAR）"
-    // 只在内置未关闭时参与构建
+    // 只在打包未关闭时参与构建
     onlyIf { providers.gradleProperty("dsh.runtime.skip").orNull != "true" }
     dshVersion.set(dshRuntimeVersion)
     targets.set(dshRuntimeTargets)

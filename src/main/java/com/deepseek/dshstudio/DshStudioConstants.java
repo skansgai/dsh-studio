@@ -22,9 +22,9 @@ public final class DshStudioConstants {
      * 命令模板里代表「用哪一份 dsh 启动」的占位符。
      * <p>
      * 展开结果由设置里的「运行时来源」决定：
-     * 内置运行时 → {@code node <运行时>/node_modules/@deepseek-ai/dsh/lib/bin.js}；
+     * 已下载运行时 → {@code node <运行时>/node_modules/@deepseek-ai/dsh/lib/bin.js}；
      * 系统 dsh → {@code npx --yes @deepseek-ai/dsh}。
-     * 写成占位符而不是写死 npx，是为了让用户在自定义模板里也能享受内置运行时。
+     * 写成占位符而不是写死 npx，是为了让用户在自定义模板里也能享受已下载运行时。
      */
     public static final String DSH_PLACEHOLDER = "{dsh}";
 
@@ -68,9 +68,9 @@ public final class DshStudioConstants {
             "{dsh} --profile headless {task}";
 
     /**
-     * 内置运行时（以及系统 dsh）要求的最低 Node.js 版本。
+     * dsh 运行时（已下载的运行时包与系统 dsh）要求的最低 Node.js 版本。
      * <p>
-     * 依据：2026-09-14 从内置运行时里 553 个 {@code package.json} 的 {@code engines.node}
+     * 依据：2026-09-14 从运行时包（{@code dsh-runtime.zip}）里 553 个 {@code package.json} 的 {@code engines.node}
      * 汇总取最大值 —— {@code undici@8.10.2}（被官方插件 {@code dsh-web-fetch-http} 依赖）
      * 与 {@code @earendil-works/pi-ai@0.84.4}（被 {@code dsh-llm-pi-ai} 依赖）都声明
      * {@code >= 22.19.0}，{@code commander@15}（被含 {@code dsh} 自身在内 5 个官方包依赖）

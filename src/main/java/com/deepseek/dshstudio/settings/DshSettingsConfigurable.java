@@ -404,14 +404,14 @@ public final class DshSettingsConfigurable implements Configurable {
                         "在用户目录里写一个小文件要 ~85 毫秒，而系统临时目录被排除在外。" +
                         "1.8 万个文件因此相差约 <b>27 分钟 vs 6 秒</b>，所以 Windows 默认放临时目录；" +
                         "若担心临时目录被系统清理，或所在环境禁止从临时目录执行程序，可改为用户目录。<br>" +
-                        "内置运行时与 npx 都依赖本机安装的 <b>Node.js "
+                        "dsh 运行时与 npx 都依赖本机安装的 <b>Node.js "
                         + DshStudioConstants.MIN_NODE_VERSION
                         + " 或更高</b>（该下限来自依赖包的 engines 声明，低于它只提示、不拦截）。" +
                         "可执行位（终端、ripgrep）会在解包时自动补上。" +
                         "</div></html>");
     }
 
-    /** 刷新运行时区块：当前生效来源、内置包信息、目录、按钮可用性。 */
+    /** 刷新运行时区块：当前生效来源、已下载版本、目录、按钮可用性。 */
     private void refreshRuntimeInfo() {
         DshRuntimeManager rt = DshRuntimeManager.getInstance();
 
@@ -452,8 +452,8 @@ public final class DshSettingsConfigurable implements Configurable {
             runtimeHotLabel.setForeground(JBColor.foreground());
         }
         removeHotRuntimeButton.setEnabled(!versions.isEmpty());
-        runtimeHotLabel.setToolTipText("热更新版本解包在运行时目录里，自动模式下优先于内置基线使用。"
-                + "想回滚到内置基线，把「运行时来源」改成「仅内置运行时」即可，不必删除。");
+        runtimeHotLabel.setToolTipText("已下载的运行时版本解包在运行时目录里，自动模式下优先使用。"
+                + "想回滚到系统 dsh，把「运行时来源」改成「仅系统 dsh」即可，不必删除。");
     }
 
     /** 手动检查运行时更新（后台查询，发现新版本再问用户要不要下载）。 */
@@ -577,7 +577,7 @@ public final class DshSettingsConfigurable implements Configurable {
         }
     }
 
-    /** 删除整个运行时目录（下次启动会重新解包内置基线）。 */
+    /** 删除整个运行时目录（下次启动会按需重新下载）。 */
     private void clearRuntime() {
         DshRuntimeManager rt = DshRuntimeManager.getInstance();
         Path root = rt.runtimeRootFor((DshRuntimeLocation) runtimeLocationCombo.getSelectedItem());

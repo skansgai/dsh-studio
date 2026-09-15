@@ -25,7 +25,7 @@ public class DshNodeCheckerTest {
         assertTrue(DshNodeChecker.commandNeedsNode(List.of("npx", "--yes", "@deepseek-ai/dsh")));
         assertTrue(DshNodeChecker.commandNeedsNode(List.of("npx.cmd", "web")));
         assertTrue(DshNodeChecker.commandNeedsNode(List.of("npm", "exec", "dsh")));
-        // 内置运行时：node <运行时>/node_modules/@deepseek-ai/dsh/lib/bin.js
+        // 已下载运行时：node <运行时>/node_modules/@deepseek-ai/dsh/lib/bin.js
         assertTrue(DshNodeChecker.commandNeedsNode(List.of("node", "lib/bin.js", "web")));
         assertTrue(DshNodeChecker.commandNeedsNode(List.of("node.exe", "lib/bin.js")));
         // 带路径时按文件名判断（用正斜杠，保证在 Windows / Unix 上行为一致）

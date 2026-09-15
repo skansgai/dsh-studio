@@ -47,8 +47,8 @@ public final class DshUtil {
     /**
      * 当前平台的标识，形如 {@code win32-x64} / {@code darwin-arm64} / {@code linux-x64}。
      * <p>
-     * 与内置运行时打包时用的命名保持一致（npm 的 {@code os}/{@code cpu} 字段取值），
-     * 用来判断「内置运行时是否覆盖当前平台」。
+     * 与运行时打包时用的命名保持一致（npm 的 {@code os}/{@code cpu} 字段取值），
+     * 用来决定下载哪个平台的运行时包。
      */
     public static String hostTarget() {
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
@@ -129,7 +129,7 @@ public final class DshUtil {
      * 构建服务器启动命令。
      * <p>
      * 模板占位符：{host} {port} {workdir} {dshHome} 为纯文本替换；
-     * {dsh} 展开为「用哪一份 dsh 启动」的完整前缀（内置运行时 / 热更新版本 / 系统 npx），
+     * {dsh} 展开为「用哪一份 dsh 启动」的完整前缀（已下载运行时 / 系统 npx），
      * 由 {@link DshRuntimeManager} 按设置里的运行时来源决定。
      */
     public static List<String> resolveCommandLine(@NotNull DshSettingsState settings,
@@ -146,7 +146,7 @@ public final class DshUtil {
     public static List<String> resolveTemplate(@NotNull String template,
                                                @NotNull DshSettingsState settings,
                                                @Nullable Project project) {
-        // 模板里没有 {dsh} 时完全不碰运行时解析：自定义命令不应被内置运行时的可用性牵连
+        // 模板里没有 {dsh} 时完全不碰运行时解析：自定义命令不应被已下载运行时的可用性牵连
         if (!template.contains(DshStudioConstants.DSH_PLACEHOLDER)) {
             return resolveTemplate(template, settings, project, List.of());
         }
@@ -466,7 +466,7 @@ public final class DshUtil {
         return resolveOnPath("npx.cmd") != null || resolveOnPath("npx") != null;
     }
 
-    /** 检查本机是否安装了 Node.js（内置运行时与 npx 启动都依赖它）。 */
+    /** 检查本机是否安装了 Node.js（dsh 运行时与 npx 启动都依赖它）。 */
     public static boolean isNodeAvailable() {
         if (!isWindows()) {
             return commandExists("node");

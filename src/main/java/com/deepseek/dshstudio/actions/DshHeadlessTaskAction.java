@@ -144,7 +144,7 @@ public final class DshHeadlessTaskAction extends AnAction {
     /**
      * 基于 {dsh} {task} {workdir} {dshHome} 占位符解析 headless 命令。
      * <p>
-     * {dsh} 由 DshUtil 按设置里的运行时来源展开（内置运行时 / 热更新版本 / 系统 npx）。
+     * {dsh} 由 DshUtil 按设置里的运行时来源展开（已下载运行时 / 系统 npx）。
      */
     private static List<String> resolveCommand(Project project, String task) {
         DshSettingsState settings = DshSettingsState.getInstance();

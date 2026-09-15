@@ -127,7 +127,7 @@ public final class DshServerManager {
     public void startServer() {
         DshSettingsState settings = DshSettingsState.getInstance();
 
-        // 运行时准备刻意放在锁外：首次使用需要解包内置运行时（80 MB / 1.8 万文件，
+        // 运行时准备刻意放在锁外：首次使用需要下载并解包运行时（约 41 MB / 1.8 万文件，
         // 可能几十秒并弹出进度框），期间不该占着 lock 让其它线程干等。
         try {
             DshRuntimeManager.getInstance()
@@ -159,7 +159,7 @@ public final class DshServerManager {
             notifyBalloon("已改用系统 dsh 启动",
                     StringUtil.escapeXmlEntities(resolveNote), NotificationType.WARNING);
         }
-        // 内置运行时与系统 npx 都是 Node 程序。缺 Node 或版本偏低时弹一次引导
+        // dsh 运行时与系统 npx 都是 Node 程序。缺 Node 或版本偏低时弹一次引导
         // （只警告不拦截，用户选「继续尝试」就往下走）。已经能连上外部实例时不需要 Node。
         if (!reachable && needsNode(command) && !DshNodeChecker.guideIfNeeded(project)) {
             appendLog("[dsh] 已取消启动：Node.js 未就绪。\n");

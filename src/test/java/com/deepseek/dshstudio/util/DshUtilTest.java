@@ -70,7 +70,7 @@ public class DshUtilTest {
     @Test
     public void dshPrefixKeepsPathsWithSpacesIntact() {
         DshSettingsState settings = new DshSettingsState();
-        // 内置运行时的展开结果含带空格的路径，必须按 token 拼接而不是字符串替换
+        // 已下载运行时的展开结果含带空格的路径，必须按 token 拼接而不是字符串替换
         List<String> command = DshUtil.resolveTemplate(
                 "{dsh} web --port {port}", settings, null,
                 List.of("C:\\Program Files\\nodejs\\node.exe",

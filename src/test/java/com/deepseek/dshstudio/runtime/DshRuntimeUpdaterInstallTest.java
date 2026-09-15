@@ -209,7 +209,7 @@ public class DshRuntimeUpdaterInstallTest {
         Files.createDirectories(root.resolve("4.0.0"));
         writeEntryOnly(root.resolve("5.0.0"));
 
-        assertEquals("只列真正装好的热更新版本，新的在前；内置基线和暂存目录不算",
+        assertEquals("只列真正装好的热更新版本，新的在前；暂存目录不算",
                 List.of("2.0.0", "1.0.0"), DshRuntimeUpdater.scanInstalledVersions(root));
     }
 

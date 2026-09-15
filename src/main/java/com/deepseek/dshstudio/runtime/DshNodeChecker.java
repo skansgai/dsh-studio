@@ -17,7 +17,7 @@ import java.util.function.BooleanSupplier;
 /**
  * Node.js 可用性探测与引导。
  * <p>
- * 内置运行时与系统 dsh 都是 Node 程序，本机没有 Node 就无从启动；版本过低则可能在运行期
+ * dsh 运行时与系统 dsh 都是 Node 程序，本机没有 Node 就无从启动；版本过低则可能在运行期
  * 才抛出难以定位的错误。这里做两件事：探测（{@link #check()}）和一次性的引导对话框
  * （{@link #guideIfNeeded(Project)}）。
  * <p>
@@ -73,7 +73,7 @@ public final class DshNodeChecker {
         public String describe() {
             switch (status) {
                 case MISSING:
-                    return "未检测到 Node.js（内置运行时需要 "
+                    return "未检测到 Node.js（dsh 运行时需要 "
                             + DshStudioConstants.MIN_NODE_VERSION + " 或更高）";
                 case TOO_OLD:
                     return "Node.js " + version + " 低于要求的 "
@@ -113,7 +113,7 @@ public final class DshNodeChecker {
     /**
      * 判断一条启动命令是否需要本机安装 Node.js。
      * <p>
-     * 内置运行时走的是 {@code node .../lib/bin.js}，系统方式走 {@code npx}，
+     * 已下载运行时走的是 {@code node .../lib/bin.js}，系统方式走 {@code npx}，
      * 全局安装则是 {@code dsh} —— 三者都是 Node 程序，缺 Node 时启动必然失败。
      * 用户在设置里自定义成别的命令（如一段 shell 脚本）时不该误报，所以按可执行文件名判断。
      */
@@ -155,10 +155,10 @@ public final class DshNodeChecker {
     private static String buildMessage(@NotNull Report report) {
         StringBuilder sb = new StringBuilder("<html><div style='width:430px'>");
         if (report.status == Status.MISSING) {
-            sb.append("内置的 dsh 运行时是一个 Node 程序，但本机没有检测到 <code>node</code>。");
+            sb.append("dsh 运行时是一个 Node 程序，但本机没有检测到 <code>node</code>。");
         } else {
             sb.append("检测到 <b>Node.js ").append(report.version)
-                    .append("</b>，低于内置 dsh 运行时要求的最低版本 <b>")
+                    .append("</b>，低于 dsh 运行时要求的最低版本 <b>")
                     .append(DshStudioConstants.MIN_NODE_VERSION).append("</b>。");
         }
         sb.append("<br><br>最低版本：<b>").append(DshStudioConstants.MIN_NODE_VERSION)
