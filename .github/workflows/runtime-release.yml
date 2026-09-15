@@ -13,7 +13,7 @@ name: 发布 dsh 运行时（热更新渠道）
 # 复用它比重新实现一套可靠得多。
 #
 # 标签约定：runtime-<dshVersion>，例如 runtime-0.1.5-rc.1
-# 资产（按平台拆分，插件只下自己那一份；整包 79 MB，拆开每平台约 37 MB）：
+# 资产（按平台拆分，插件只下自己那一份；整包压缩后 82.9 MB，拆开每平台约 41 MB，省 51%）：
 #   dsh-runtime-<target>.zip      target ∈ win32-x64 / darwin-x64 / darwin-arm64 / linux-x64 / linux-arm64
 #   runtime-meta-<target>.txt     对应的元数据（dshVersion / stamp / entries / unpackedBytes）
 
@@ -31,6 +31,11 @@ on:
 permissions:
   contents: write
 
+# 同一个 dsh 版本不并发构建：两个 run 同时 gh release create 同一个 tag，后一个必然失败。
+concurrency:
+  group: runtime-release
+  cancel-in-progress: false
+
 jobs:
   check:
     name: 查 npm 上有没有新版本
@@ -38,6 +43,10 @@ jobs:
     outputs:
       version: ${{ steps.pick.outputs.version }}
       skip: ${{ steps.pick.outputs.skip }}
+    env:
+      # 这个 job 没有 actions/checkout，gh 无法从本地 git 仓库推断目标仓库，
+      # 必须显式指定，否则 gh 会报 "not a git repository"。
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: 选定版本并判断是否已发布
         id: pick
@@ -70,8 +79,21 @@ jobs:
     if: needs.check.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
+
+      # 仓库里的 distributionUrl 指向腾讯云镜像（为国内网络改的）。runner 在海外，
+      # 这里改回官方源，免得 CI 依赖一个跟它不在同一区域的镜像。
+      - name: Gradle 换回官方分发包源
+        run: |
+          set -euo pipefail
+          VER=$(sed -n 's#.*gradle-\([0-9][0-9.]*\)-bin\.zip.*#\1#p' gradle/wrapper/gradle-wrapper.properties | tail -1)
+          echo "Gradle 版本：$VER"
+          sed -i "s#^distributionUrl=.*#distributionUrl=https\\\\://services.gradle.org/distributions/gradle-${VER}-bin.zip#" \
+            gradle/wrapper/gradle-wrapper.properties
+          grep '^distributionUrl=' gradle/wrapper/gradle-wrapper.properties
 
       # 构建脚本要求「构建机自己的平台必须在目标列表里」——只有它的二进制能在构建机上
       # 真正跑起来，后面的自检才有意义。ubuntu-latest 是 linux-x64，在目标列表内。
@@ -80,11 +102,20 @@ jobs:
         with:
           node-version: '22'
 
-      - name: 装 JDK
+      # 需要两个 JDK：
+      #   * 17 —— 项目显式钉死的工具链（java.toolchain.languageVersion=17）。本机是靠
+      #     用户级 org.gradle.java.installations.paths 找到 D:\jdks\jdk-17.0.2 的，CI 上没有
+      #     这份配置，settings.gradle.kts 也没配 toolchain resolver（无法自动下载），
+      #     所以必须在这里真的装一个 17。setup-java 会同时导出 JAVA_HOME_17_X64，
+      #     Gradle 的自动探测认得这个环境变量。
+      #   * 21 —— 作为默认 JAVA_HOME 运行 Gradle 本身。
+      - name: 装 JDK（17 供工具链，21 跑 Gradle）
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: |
+            17
+            21
 
       - name: 构建运行时（全 5 平台 + 按平台拆包）
         run: |
@@ -95,6 +126,19 @@ jobs:
       - name: 列出产物
         run: ls -lh build/dsh-runtime/ build/dsh-runtime/split/
 
+      - name: 生成发布说明
+        env:
+          VER: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          cat > RELEASE_NOTES.md <<EOF
+          内置 dsh 运行时 ${VER}（按平台拆分，供插件热更新使用）。
+
+          由 bundleDshRuntime 构建，与插件内置基线走完全相同的裁剪与自检流程。
+
+          各平台只下自己那一份：dsh-runtime-<target>.zip + runtime-meta-<target>.txt
+          EOF
+
       - name: 发布 Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -103,9 +147,5 @@ jobs:
           set -euo pipefail
           gh release create "runtime-$VER" \
             --title "dsh 运行时 $VER" \
-            --notes "内置 dsh 运行时 **$VER**（按平台拆分，供插件热更新使用）。
-
-          由 \`bundleDshRuntime\` 构建，与插件内置基线走完全相同的裁剪与自检流程。
-
-          各平台下载自己那一份：\`dsh-runtime-<target>.zip\` + \`runtime-meta-<target>.txt\`。" \
+            --notes-file RELEASE_NOTES.md \
             build/dsh-runtime/split/*.zip build/dsh-runtime/split/*.txt
