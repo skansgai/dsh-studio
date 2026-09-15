@@ -295,12 +295,40 @@ dsh 的 72 个直接依赖里 69 个是一方包，但**全部**用 `^x.y.z` 范
 | 资产 | `dsh-runtime-<target>.zip` + `runtime-meta-<target>.txt` |
 | 发现 | `GET /repos/skansgai/dsh-studio/releases?per_page=30`，按标签前缀过滤后取最大版本 |
 
-**按平台拆包的理由（实测）**：整包压缩后 79.0 MB，而各平台专有包（sharp/libvips、
-ripgrep、koffi、node-addon）合计 52.4 MB。只保留自己平台后每个包约 **37 MB，省 53%**。
-拆包不物化新树（那是上万文件，本机带安全过滤驱动时得几十分钟），而是在写 zip 时按
+**按平台拆包的理由（实测，2026-09-15）**：合并包 18428 个条目、压缩后 82.9 MB
+（解包后 239.7 MB）；按平台拆开后每个包约 **41 MB**（win32-x64 42.8 / linux-x64 42.3 /
+darwin-arm64 41.5 MB），**省约 51%** —— 差额几乎全是别的平台的 sharp/libvips、ripgrep、
+koffi、node-addon 二进制。
+拆包不物化新树（那是上万文件的第二份拷贝），而是在写 zip 时按
 lockfile 的 `os`/`cpu` 约束过滤路径；每个拆出来的包都会单独跑一遍原生包完整性校验
 （`verifySplitZip`）——这类缺失在 JS 层完全看不出来，只有用户在那台机器上真正用终端 /
 贴图片时才炸，所以宁可构建失败。
+
+### 5.1.2 打包时必须校验明文（踩过的坑）
+
+审计内置包时发现 `dsh-runtime.zip` 的 18390 个条目里有 **36 个是密文**（文件头含
+`E-SafeNet`），集中在 `@img/sharp-*`、`@koromix/koffi-*`、`@vscode/ripgrep`、
+`node-addon-require-builtin-*` 这些原生包的 `package.json` / `.h` / `.js` 上。
+
+危害：用户机器上没有 DLP，`node` 读到的就是原始密文字节，`package.json` 解析失败 →
+**原生模块直接加载不了**（sharp 贴图、koffi 终端全废）。
+
+成因：加密是**异步**的，且只对「DLP 范围内路径」生效。`work/raw/<target>/**`（npm 写的）
+实测 0 密文；而 Gradle（java）解包平台 tarball 时写的文件会被加密，打包时刚好赶上
+加密完成的那些就进了 zip —— 所以数量是**非确定性**的（可能 0，也可能 36）。
+
+修法两条，缺一不可：
+
+1. **把工作目录挪出 DLP 范围**（`workDir` → `%TEMP%/dshstudio-runtime/work`）：
+   根本不在范围内落盘就不会被加密，顺带拿到 200 倍的速度提升（见 §5.2）。
+2. **`writeZip` 里加内容级硬校验**：边打包边读每个文件前 64 字节，命中 `E-SafeNet`
+   就删掉坏产物并让构建失败，错误信息列出前 10 个文件名。
+   不要只依赖「路径应该没问题」这个假设 —— 加密行为依赖环境，必须实测。
+   修完后 6 个 zip 全部 0 密文。
+
+> 同样的道理适用于 `runtime-meta`：它的扩展名刻意用 `.txt` 而不是 `.json`，
+> 因为 DLP 会按扩展名加密 `.json`；`processResources` 里还有一道 `doFirst` 兜底校验。
+
 
 ### 5.2 运行时根放哪里（最反直觉的一个决定）
 

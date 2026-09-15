@@ -59,7 +59,7 @@ DeepSeek Harness 是 DeepSeek 的开源编码智能体框架；`dsh web` 会在�
 
 ### 0.2.0 新功能使用方式
 
-- **发送代码到 Harness**：在编辑器里选中一段代码（不选中则发送整个文件），右键 → `DeepSeek Harness → Send Code to Harness…`。弹窗里可编辑附带给 agent 的指令，点 OK 后插件会确保服务器在运行、把代码作为 prompt 提交到 Harness 会话，并自动打开工具窗口。首次使用会触发 `npx --yes @deepseek-ai/dsh` 下载（约 284MB / 14 分钟），期间状态栏显示“启动中”属正常。
+- **发送代码到 Harness**：在编辑器里选中一段代码（不选中则发送整个文件），右键 → `DeepSeek Harness → Send Code to Harness…`。弹窗里可编辑附带给 agent 的指令，点 OK 后插件会确保服务器在运行、把代码作为 prompt 提交到 Harness 会话，并自动打开工具窗口。插件**内置了 dsh 运行时**（含 Windows / macOS / Linux 五个平台），首次使用只需把内置包解压到本地（Windows 解压到系统临时目录，macOS / Linux 解压到 `~/.dshstudio/runtime`），**不需要联网下载、也不会触发 `npx`**；通常几秒到几十秒，期间状态栏显示“启动中”属正常。之后可以在 `Settings → Tools → DeepSeek Harness` 里检查 dsh 的新版本并按需下载（只下当前平台，约 41 MB）。
 
 ### 0.3.0 新功能使用方式
 
