@@ -16,6 +16,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -202,8 +203,27 @@ public final class DshRuntimeUpdater {
     @NotNull
     public Path downloadAndInstall(@NotNull UpdateInfo info,
                                    @Nullable ProgressIndicator indicator) throws IOException {
-        DshRuntimeManager rt = DshRuntimeManager.getInstance();
-        Path root = rt.runtimeRoot();
+        return installInto(DshRuntimeManager.getInstance().runtimeRoot(), info, indicator);
+    }
+
+    /**
+     * {@link #downloadAndInstall} 的实现体，根目录由调用方给定。
+     * <p>
+     * 把根目录抽成参数是为了可测：安装是整条链路里唯一「写盘 + 改目录名」的一步，
+     * 也恰恰是最难在用户机器上复现的一步（断网、包被截断、IDE 被强杀留下的脏暂存目录）。
+     * 直接用 {@code DshRuntimeManager.getInstance()} 跑测试会写进用户的真实运行时目录，
+     * 抽出来之后测试可以喂一个临时目录，把「下载 → 校验 → 解包 → 自检 → 原子改名」
+     * 整条路径真的跑一遍。
+     * <p>
+     * 版本号在这里再校验一次：它会直接拼进路径，而 {@link #checkForUpdate} 里那道校验
+     * 保护不了「调用方自己构造 {@link UpdateInfo}」的情况。
+     */
+    @NotNull
+    static Path installInto(@NotNull Path root, @NotNull UpdateInfo info,
+                            @Nullable ProgressIndicator indicator) throws IOException {
+        if (!isSafeVersion(info.dshVersion)) {
+            throw new IOException("非法的版本号：" + info.dshVersion);
+        }
         Files.createDirectories(root);
         Path target = root.resolve(info.dshVersion);
 
@@ -264,7 +284,12 @@ public final class DshRuntimeUpdater {
     /** 已安装的热更新版本，新的在前。 */
     @NotNull
     public List<String> installedVersions() {
-        Path root = DshRuntimeManager.getInstance().runtimeRoot();
+        return scanInstalledVersions(DshRuntimeManager.getInstance().runtimeRoot());
+    }
+
+    /** {@link #installedVersions} 的实现体，根目录由调用方给定（便于测试）。 */
+    @NotNull
+    static List<String> scanInstalledVersions(@NotNull Path root) {
         List<String> versions = new ArrayList<>();
         if (!Files.isDirectory(root)) {
             return versions;
@@ -292,10 +317,15 @@ public final class DshRuntimeUpdater {
 
     /** 删除一个已安装的热更新版本（回滚用）；不存在时什么也不做。 */
     public void removeVersion(@NotNull String version) throws IOException {
+        removeVersionAt(DshRuntimeManager.getInstance().runtimeRoot(), version);
+    }
+
+    /** {@link #removeVersion} 的实现体，根目录由调用方给定（便于测试）。 */
+    static void removeVersionAt(@NotNull Path root, @NotNull String version) throws IOException {
         if (!isSafeVersion(version)) {
             throw new IOException("非法的版本号：" + version);
         }
-        Path dir = DshRuntimeManager.getInstance().runtimeRoot().resolve(version);
+        Path dir = root.resolve(version);
         if (Files.isDirectory(dir)) {
             DshRuntimeManager.deleteRecursively(dir);
         }
@@ -307,25 +337,42 @@ public final class DshRuntimeUpdater {
      * 版本号会直接当作目录名，必须挡住路径穿越。
      * 它来自我们自己发布的 tag，但这里不该依赖上游的自觉。
      */
-    private static boolean isSafeVersion(@NotNull String version) {
+    static boolean isSafeVersion(@NotNull String version) {
+        // 空串必须单独挡：`root.resolve("")` 返回的是 root 本身，不是 root 下的某个子目录。
+        // 放过去的话 removeVersionAt 会把**整个运行时根**（含内置基线和所有已装版本）删掉，
+        // installInto 会把版本内容直接解到根目录里。
+        if (version.isEmpty()) {
+            return false;
+        }
         return !version.contains("/") && !version.contains("\\")
                 && !version.contains("..") && !version.startsWith(".");
     }
 
+    /**
+     * 把一个 URL 的内容下载到文件。
+     * <p>
+     * 这里刻意用 {@link URLConnection} 而不是直接强转 {@link HttpURLConnection}：
+     * 只有跟随重定向和读状态码是 HTTP 专有的，其余（超时、请求头、长度、输入流）在
+     * {@code URLConnection} 上都有。放宽之后测试可以用 {@code file:} URL 把
+     * 「下载 → 校验 → 解包」整条链路跑完，不必在测试里起一个监听端口 —— 端口在 CI、
+     * 沙箱和开发机上都不一定绑得上，那会让测试变成间歇性失败。
+     */
     private static void download(@NotNull String url, @NotNull Path dest, long expectedBytes,
                                  long alreadyDone, @Nullable ProgressIndicator indicator)
             throws IOException {
-        HttpURLConnection connection = null;
+        URLConnection connection = null;
         try {
-            connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
+            connection = URI.create(url).toURL().openConnection();
             connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
             connection.setReadTimeout(READ_TIMEOUT_MS);
-            connection.setInstanceFollowRedirects(true);
             connection.setRequestProperty("Accept", "application/octet-stream");
             connection.setRequestProperty("User-Agent", "DshStudio-RuntimeUpdater");
-            int code = connection.getResponseCode();
-            if (code < 200 || code >= 300) {
-                throw new IOException("下载失败：HTTP " + code + "（" + url + "）");
+            if (connection instanceof HttpURLConnection http) {
+                http.setInstanceFollowRedirects(true);
+                int code = http.getResponseCode();
+                if (code < 200 || code >= 300) {
+                    throw new IOException("下载失败：HTTP " + code + "（" + url + "）");
+                }
             }
             long total = expectedBytes > 0 ? expectedBytes : connection.getContentLengthLong();
             try (InputStream in = connection.getInputStream();
@@ -348,8 +395,9 @@ public final class DshRuntimeUpdater {
                 }
             }
         } finally {
-            if (connection != null) {
-                connection.disconnect();
+            // disconnect() 只有 HttpURLConnection 有；file: 之类的连接没有可断的东西。
+            if (connection instanceof HttpURLConnection http) {
+                http.disconnect();
             }
         }
     }
