@@ -152,6 +152,13 @@ public final class DshServerManager {
             setState(ServerState.FAILED);
             return;
         }
+        // 解析时若因 DLP 等原因从内置/热更新回退到系统 dsh，把原因告诉用户（不是失败，是降级）
+        String resolveNote = DshRuntimeManager.getInstance().consumeLastResolveNote();
+        if (resolveNote != null && !resolveNote.isEmpty()) {
+            appendLog("[dsh] " + resolveNote + "\n");
+            notifyBalloon("已改用系统 dsh 启动",
+                    StringUtil.escapeXmlEntities(resolveNote), NotificationType.WARNING);
+        }
         // 内置运行时与系统 npx 都是 Node 程序。缺 Node 或版本偏低时弹一次引导
         // （只警告不拦截，用户选「继续尝试」就往下走）。已经能连上外部实例时不需要 Node。
         if (!reachable && needsNode(command) && !DshNodeChecker.guideIfNeeded(project)) {

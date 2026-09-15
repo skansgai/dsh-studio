@@ -37,6 +37,11 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 内置 dsh 运行时的解包与解析。
@@ -105,6 +110,69 @@ public final class DshRuntimeManager {
 
     /** 入口脚本的 shebang；正常解包出来必须以此开头。 */
     private static final String ENTRY_SHEBANG = "#!";
+
+    /**
+     * 用 node 自身校验一份解包好的运行时是否真的可读的内联脚本（经 {@code node -e} 传入，
+     * 不落盘，因此不受本机透明加密影响）。详见 {@link #nodeCanReadRuntime}。
+     * <p>
+     * 刻意不用 {@code \n} 之外任何反斜杠，避免被各层字符串转义误伤；需要换行时用
+     * {@code String.fromCharCode(10)}。
+     */
+    private static final String NODE_RUNTIME_CHECK_SCRIPT = """
+        const fs = require('fs');
+        const path = require('path');
+        const MARK = Buffer.from('E-SafeNet');
+        function head(p) {
+          try { const fd = fs.openSync(p, 'r'); const b = Buffer.alloc(64);
+            fs.readSync(fd, b, 0, 64, 0); fs.closeSync(fd); return b; }
+          catch (e) { return null; }
+        }
+        function fail(msg) { process.stdout.write('CIPHERTEXT ' + msg + String.fromCharCode(10)); process.exit(3); }
+        const pkg = process.argv[1], entry = process.argv[2], dir = process.argv[3];
+        let h = head(pkg); if (!h) fail('no-package-json'); if (h.includes(MARK)) fail('package-json-ciphertext');
+        try { JSON.parse(fs.readFileSync(pkg, 'utf8')); } catch (e) { fail('package-json-parse ' + e.message); }
+        h = head(entry); if (!h) fail('no-entry'); if (h.includes(MARK)) fail('entry-ciphertext');
+        if (!fs.readFileSync(entry, 'utf8').startsWith('#!')) fail('entry-no-shebang');
+        let n = 0; const LIMIT = 400;
+        function walk(d) {
+          let ents; try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+          for (const e of ents) { if (n >= LIMIT) return;
+            const p = path.join(d, e.name);
+            if (e.isDirectory()) { walk(p); continue; }
+            const ext = path.extname(e.name).toLowerCase();
+            if (ext !== '.js' && ext !== '.json' && ext !== '.ts') continue;
+            n++;
+            let b; const fd = fs.openSync(p, 'r');
+            try { b = Buffer.alloc(64); fs.readSync(fd, b, 0, 64, 0); } finally { fs.closeSync(fd); }
+            if (b.includes(MARK)) fail('scan ' + p);
+          }
+        }
+        try { walk(dir); } catch (e) {}
+        process.stdout.write('OK' + String.fromCharCode(10)); process.exit(0);
+        """;
+
+    /** 测试可注入的 node 可执行文件；为 {@code null} 时用 {@link DshUtil#resolveNodeExecutable()}。 */
+    @Nullable
+    private static String nodeExecutableOverride;
+
+    /** 测试用：覆盖 node 可执行文件位置。 */
+    static void setNodeExecutableForTest(@Nullable String exe) {
+        nodeExecutableOverride = exe;
+    }
+
+    /** 最近一次 {@link #resolve} 留下的降级说明（如「内置运行时被 DLP 加密，已回退系统 dsh」）；消费后清空。 */
+    private volatile String lastResolveNote;
+
+    /** 读取并清空最近一次 resolve 留下的说明（{@code null} 表示没有）。 */
+    @Nullable
+    public String consumeLastResolveNote() {
+        String note = lastResolveNote;
+        lastResolveNote = null;
+        return note;
+    }
+
+    /** 运行时可读性自检结果缓存（按目录），避免一次会话里反复拉起 node。 */
+    private static final Map<Path, Boolean> NODE_READABLE_CACHE = new ConcurrentHashMap<>();
 
     private final Object metaLock = new Object();
     private volatile boolean metaResolved;
@@ -347,25 +415,35 @@ public final class DshRuntimeManager {
         public final Path dir;
         /** 启动命令前缀，例如 {@code [node, .../lib/bin.js]} 或 {@code [npx, --yes, @deepseek-ai/dsh]}。 */
         public final List<String> prefix;
+        /** 解析时发生的「降级 / 告警」说明（例如内置运行时被加密后回退到系统 dsh）；正常为 {@code null}。 */
+        @Nullable
+        public final String warning;
 
-        Launch(Source source, @Nullable String version, @Nullable Path dir, List<String> prefix) {
+        Launch(Source source, @Nullable String version, @Nullable Path dir, List<String> prefix,
+               @Nullable String warning) {
             this.source = source;
             this.version = version;
             this.dir = dir;
             this.prefix = prefix;
+            this.warning = warning;
         }
     }
 
     /**
-     * 纯解析：决定这次启动用哪一份 dsh，不做任何耗时 I/O。
+     * 纯解析：决定这次启动用哪一份 dsh。
      * <p>
      * 需要内置运行时但尚未解包时，返回 {@link Source#SYSTEM} 之外的兜底结果会不准 ——
      * 所以调用方应先调 {@link #prepare(Project, DshRuntimeMode)} 保证运行时可用。
+     * <p>
+     * 选定内置 / 热更新运行时后，本方法会用 node 自身验证这份运行时能否被读取
+     * （见 {@link #nodeCanReadRuntime}）——这是发现本机透明加密（DLP）把解包出的文件加密的
+     * 唯一可靠手段（java 永远读到明文，靠 java 侧自检查不出）。验证失败时在「自动」模式下
+     * 静默回退系统 dsh 并记下说明，在「仅内置」模式下直接抛出可操作的异常。
      */
     @NotNull
     public Launch resolve(@NotNull DshRuntimeMode mode) {
         if (mode == DshRuntimeMode.SYSTEM) {
-            return systemLaunch();
+            return systemLaunch(null);
         }
 
         Meta meta = bundledMeta();
@@ -377,7 +455,13 @@ public final class DshRuntimeManager {
             if (hot != null) {
                 String version = readVersion(hot);
                 if (version != null) {
-                    return new Launch(Source.HOT_UPDATE, version, hot, nodePrefix(hot));
+                    if (nodeCanReadRuntime(hot)) {
+                        return new Launch(Source.HOT_UPDATE, version, hot, nodePrefix(hot), null);
+                    }
+                    LOG.warn("[dsh-runtime] 热更新运行时无法被 node 读取（疑似本机透明加密），回退系统 dsh");
+                    lastResolveNote = "热更新运行时无法被 node 读取（疑似本机透明加密软件加密），已改用系统 dsh（npx）启动。"
+                            + "修复办法：在设置页把「运行时位置」改到未被加密的目录，或清理运行时后重试。";
+                    return systemLaunch(lastResolveNote);
                 }
             }
         }
@@ -385,14 +469,28 @@ public final class DshRuntimeManager {
         if (usable) {
             Path dir = baselineDir(meta);
             if (isUnpacked(dir, meta)) {
-                return new Launch(Source.BUNDLED, meta.dshVersion, dir, nodePrefix(dir));
+                if (nodeCanReadRuntime(dir)) {
+                    return new Launch(Source.BUNDLED, meta.dshVersion, dir, nodePrefix(dir), null);
+                }
+                // 解包标记在、但 node 读不到：典型就是 DLP 把解包出的文件加密了。
+                if (mode == DshRuntimeMode.BUNDLED) {
+                    throw new IllegalStateException(
+                            "内置运行时已解包，但其中的文件被本机透明加密软件（DLP）加密，node 无法读取，"
+                                    + "运行时起不来。请在设置页把「运行时位置」改到未被加密的目录，"
+                                    + "或点「清理运行时」后重试，或把运行时来源改为「自动 / 仅系统 dsh」。");
+                }
+                LOG.warn("[dsh-runtime] 内置运行时无法被 node 读取（疑似 DLP 加密），回退系统 dsh");
+                lastResolveNote = "内置运行时已解包但无法被 node 读取（疑似本机透明加密软件加密），"
+                        + "已改用系统 dsh（npx）启动。修复办法：在设置页把「运行时位置」改到未被加密的目录，"
+                        + "或点「清理运行时」后重试。";
+                return systemLaunch(lastResolveNote);
             }
         }
 
         if (mode == DshRuntimeMode.BUNDLED) {
             throw new IllegalStateException(bundledUnavailableReason(meta));
         }
-        return systemLaunch();
+        return systemLaunch(null);
     }
 
     /** 「仅内置」模式下不可用时的原因说明（要能指导用户下一步怎么做）。 */
@@ -413,9 +511,9 @@ public final class DshRuntimeManager {
     }
 
     @NotNull
-    private static Launch systemLaunch() {
+    private static Launch systemLaunch(@Nullable String warning) {
         return new Launch(Source.SYSTEM, null, null,
-                List.of("npx", "--yes", "@deepseek-ai/dsh"));
+                List.of("npx", "--yes", "@deepseek-ai/dsh"), warning);
     }
 
     @NotNull
@@ -634,6 +732,56 @@ public final class DshRuntimeManager {
             throw new IOException("内置 dsh 运行时解包后的入口脚本内容异常（不以 " + ENTRY_SHEBANG
                     + " 开头），解包结果不可信。请在设置页点「清理运行时」后重试。");
         }
+    }
+
+    /**
+     * 用 node 自身验证一份解包好的运行时是否真的能被 node 读取。
+     * <p>
+     * 这是 DLP 自检的<b>唯一可靠手段</b>：企业透明加密（E-SafeNet）按<b>进程白名单</b>工作，
+     * java 读到的永远是明文，所以 {@link #verifyExtractedTree} 这类 java 侧检查在本机永远查不出加密；
+     * 而真正消费这些文件的是 node。这里直接让 node 去读 package.json、入口脚本并抽样扫描，
+     * 一旦发现 {@code E-SafeNet} 头即说明 node 拿到密文，运行时起不来。
+     * <p>
+     * 检测脚本经 {@code node -e} 传入，不落盘，因此不会触发本机加密。node 缺失或命令异常时
+     * 保守返回 {@code true}（不误杀），真正的「缺 node」由 {@link DshNodeChecker} 另行处理。
+     *
+     * @param runtimeDir 已解包的运行时根目录
+     * @return {@code true} 表示 node 能正常读取
+     */
+    public static boolean nodeCanReadRuntime(@NotNull Path runtimeDir) {
+        Boolean cached = NODE_READABLE_CACHE.get(runtimeDir);
+        if (cached != null) {
+            return cached;
+        }
+        String nodeExe = nodeExecutableOverride != null ? nodeExecutableOverride
+                : DshUtil.resolveNodeExecutable();
+        if (nodeExe == null || nodeExe.trim().isEmpty()) {
+            NODE_READABLE_CACHE.put(runtimeDir, Boolean.TRUE);
+            return true;
+        }
+        Path pkg = runtimeDir.resolve(DSH_PACKAGE);
+        Path entry = runtimeDir.resolve(DSH_ENTRY);
+        boolean result;
+        try {
+            ProcessBuilder pb = new ProcessBuilder(nodeExe, "-e", NODE_RUNTIME_CHECK_SCRIPT,
+                    pkg.toString(), entry.toString(), runtimeDir.toString());
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            boolean finished = p.waitFor(20, TimeUnit.SECONDS);
+            int code = finished ? p.exitValue() : -1;
+            if (!finished) {
+                p.destroyForcibly();
+                result = true; // 超时不要误杀
+            } else {
+                // 退出码 3 = 明确检测到密文；其余非零（含 node 缺失）按「查不了」处理，保守返回 true
+                result = code != 3;
+            }
+        } catch (Exception e) {
+            LOG.debug("[dsh-runtime] node 可读性自检异常（已忽略，按可读处理）: " + e.getMessage());
+            result = true;
+        }
+        NODE_READABLE_CACHE.put(runtimeDir, result);
+        return result;
     }
 
     /**
