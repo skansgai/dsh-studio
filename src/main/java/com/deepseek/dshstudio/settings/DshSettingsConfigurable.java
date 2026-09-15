@@ -66,14 +66,13 @@ public final class DshSettingsConfigurable implements Configurable {
     private final JComboBox<DshRuntimeLocation> runtimeLocationCombo =
             new JComboBox<>(DshRuntimeLocation.values());
     private final JBLabel runtimeEffectiveLabel = new JBLabel();
-    private final JBLabel runtimeBundledLabel = new JBLabel();
     private final JBLabel runtimePathLabel = new JBLabel();
     private final JBLabel runtimeNodeLabel = new JBLabel();
     private final JBLabel runtimeHotLabel = new JBLabel();
     private final JButton recheckNodeButton = new JButton("重新检测");
     private final JButton checkRuntimeUpdateButton = new JButton("检查更新");
     private final JButton removeHotRuntimeButton = new JButton("删除热更新");
-    private final JButton unpackButton = new JButton("立即解包");
+    private final JButton unpackButton = new JButton("下载运行时");
     private final JButton clearRuntimeButton = new JButton("清理运行时");
 
     /**
@@ -211,13 +210,6 @@ public final class DshSettingsConfigurable implements Configurable {
             c.weightx = 1;
             runtime.add(runtimeEffectiveLabel, c);
 
-            c.gridy = r++;
-            c.gridx = 0;
-            c.weightx = 0;
-            runtime.add(new JBLabel("内置包:"), c);
-            c.gridx = 1;
-            c.weightx = 1;
-            runtime.add(runtimeBundledLabel, c);
 
             c.gridy = r++;
             c.gridx = 0;
@@ -390,10 +382,10 @@ public final class DshSettingsConfigurable implements Configurable {
                 "<html><div style='width:520px'>" +
                         "<b>启动命令</b>：留空使用默认 <code>{dsh} web --host {host} --port {port} --no-open</code>；" +
                         "支持占位符 <code>{dsh} {host} {port} {workdir} {dshHome}</code>。" +
-                        "<code>{dsh}</code> 按上面的「运行时来源」展开为内置运行时或系统 <code>npx</code>；" +
+                        "<code>{dsh}</code> 按上面的「运行时来源」展开为已下载运行时或系统 <code>npx</code>；" +
                         "模板里不含它时命令原样执行。<br>" +
                         "<b>工作目录</b>：留空则使用当前项目目录（作为 Harness 的 workspace 根目录）。<br>" +
-                        "<b>DSH_HOME</b>：留空则使用 <code>~/.dsh</code>（可通过环境变量覆盖）。<br>" +
+                        "<b>DSH_HOME</b>：留空则使用运行时目录下的 <code>.dsh</code>（可通过环境变量覆盖）。<br>" +
                         "<b>服务器 Token</b>：连接非本插件启动的服务器时，从其启动输出里的 <code>?token=…</code> " +
                         "复制 token 到此处，即可使用「发送代码」「会话列表」等 IDE 内操作；本插件自己启动的服务器无需填写。" +
                         "</div></html>");
@@ -403,11 +395,10 @@ public final class DshSettingsConfigurable implements Configurable {
     private static JBLabel buildRuntimeHint() {
         return new JBLabel(
                 "<html><div style='width:520px'>" +
-                        "插件自带一份裁剪过的 dsh，<b>装上即可用、离线也能用</b>，不必先等 <code>npx</code> 下载。" +
-                        "首次启动时会自动解包（约 1.8 万个文件，只解一次）。<br>" +
+                        "插件包不再内置 dsh（保持约 115KB）。<b>首次启动会自动下载</b>当前平台的运行时包（约 41MB），校验后解包安装，无需预装 npx 大包。" +
+                        "下载与解包只在首次发生（约几十秒，之后自动复用）。<br>" +
                         "<b>运行时来源</b> —— " +
-                        "<b>自动</b>：优先用运行时目录里的热更新版本，其次用内置基线，都没有才回退系统 dsh；" +
-                        "<b>仅内置</b>：忽略热更新版本（热更新把版本弄坏时用这个回滚）；" +
+                        "<b>自动</b>：优先用已下载（热更新）的运行时，下载不到（无网络 / 发布渠道无本平台包）时回退系统 dsh；" +
                         "<b>仅系统 dsh</b>：保持旧行为，用 <code>npx --yes @deepseek-ai/dsh</code> 启动。<br>" +
                         "<b>运行时位置</b> —— 企业安全软件（DLP）会按路径范围做透明加密：" +
                         "在用户目录里写一个小文件要 ~85 毫秒，而系统临时目录被排除在外。" +
@@ -435,28 +426,9 @@ public final class DshSettingsConfigurable implements Configurable {
             runtimeEffectiveLabel.setForeground(new JBColor(0xC5221F, 0xF28B82));
         }
 
-        DshRuntimeManager.Meta meta = rt.bundledMeta();
-        if (meta == null) {
-            runtimeBundledLabel.setText("无（本安装包未内置运行时，将使用系统 dsh）");
-            runtimeBundledLabel.setForeground(JBColor.GRAY);
-            unpackButton.setEnabled(false);
-        } else {
-            StringBuilder sb = new StringBuilder("dsh ").append(meta.dshVersion)
-                    .append(" · sharp ").append(meta.sharp)
-                    .append(" · ").append(meta.targets.size()).append(" 个平台")
-                    .append(" · 解包后 ").append(DshRuntimeManager.humanSize(meta.unpackedBytes));
-            boolean hostOk = meta.targets.contains(DshUtil.hostTarget());
-            if (!hostOk) {
-                sb.append(" · 不含当前平台 ").append(DshUtil.hostTarget());
-                runtimeBundledLabel.setForeground(JBColor.GRAY);
-                unpackButton.setEnabled(false);
-            } else {
-                sb.append(rt.isBaselineUnpacked() ? " · 已解包" : " · 尚未解包");
-                runtimeBundledLabel.setForeground(JBColor.foreground());
-                unpackButton.setEnabled(true);
-            }
-            runtimeBundledLabel.setText(sb.toString());
-        }
+        // 「下载运行时」按钮：本地还没下载过任何运行时时可用（点它会走首次下载流程）；
+        // 已经下载过则禁用，避免重复下载（需要更新请点「检查更新」）。
+        unpackButton.setEnabled(rt.hotUpdateDir() == null);
 
         Path root = rt.runtimeRootFor(
                 (DshRuntimeLocation) runtimeLocationCombo.getSelectedItem());
@@ -472,7 +444,7 @@ public final class DshSettingsConfigurable implements Configurable {
     private void refreshHotInfo() {
         List<String> versions = DshRuntimeUpdater.getInstance().installedVersions();
         if (versions.isEmpty()) {
-            runtimeHotLabel.setText("无（当前用的是内置运行时或系统 dsh）");
+            runtimeHotLabel.setText("无（当前用的是系统 dsh，或尚未下载运行时）");
             runtimeHotLabel.setForeground(JBColor.GRAY);
         } else {
             runtimeHotLabel.setText(String.join("、", versions)
@@ -533,7 +505,7 @@ public final class DshSettingsConfigurable implements Configurable {
                                 refreshRuntimeInfo();
                                 Messages.showInfoMessage(
                                         "dsh " + info.dshVersion + " 已就绪，下次启动服务器时生效。\n\n"
-                                                + "想回滚到内置基线：把「运行时来源」改成「仅内置运行时」。",
+                                                + "想只用系统 dsh：把「运行时来源」改成「仅系统 dsh」。",
                                         "dsh 运行时已更新");
                             });
                         } catch (ProcessCanceledException canceled) {
@@ -545,7 +517,7 @@ public final class DshSettingsConfigurable implements Configurable {
                 });
     }
 
-    /** 删除所有热更新版本（回滚到内置基线）。 */
+    /** 删除所有已下载的运行时版本（回退到系统 dsh）。 */
     private void removeHotRuntime() {
         DshRuntimeUpdater updater = DshRuntimeUpdater.getInstance();
         List<String> versions = updater.installedVersions();
@@ -554,7 +526,7 @@ public final class DshSettingsConfigurable implements Configurable {
         }
         if (Messages.showYesNoDialog(
                 "确定要删除以下热更新版本吗？\n\n" + String.join("\n", versions) + "\n\n"
-                        + "删除后会退回使用插件内置的运行时（或系统 dsh）。",
+                        + "删除后会改用系统 dsh 启动（若已下载其它版本则优先用最新的）。",
                 "删除热更新版本", Messages.getQuestionIcon()) != Messages.YES) {
             return;
         }
@@ -586,21 +558,21 @@ public final class DshSettingsConfigurable implements Configurable {
         runtimeNodeLabel.setForeground(nodeReport.isOk()
                 ? JBColor.foreground()
                 : new JBColor(0xC5221F, 0xF28B82));
-        runtimeNodeLabel.setToolTipText("内置运行时与系统 dsh 都是 Node 程序。"
+        runtimeNodeLabel.setToolTipText("已下载运行时与系统 dsh 都是 Node 程序。"
                 + "最低版本 " + DshStudioConstants.MIN_NODE_VERSION
                 + " 来自依赖包的 engines 声明，低于它只会提示、不会拦截启动。");
     }
 
-    /** 立即解包内置运行时（EDT 上会弹出带进度的模态框）。 */
+    /** 首次下载并解包 dsh 运行时（EDT 上会弹出带进度的模态框）。 */
     private void unpackNow() {
         unpackButton.setEnabled(false);
         unpackButton.setText("解包中…");
         try {
-            DshRuntimeManager.getInstance().prepare(null, DshRuntimeMode.BUNDLED);
+            DshRuntimeManager.getInstance().prepare(null, DshRuntimeMode.AUTO);
         } catch (Exception e) {
-            notifyError("解包内置运行时失败", String.valueOf(e.getMessage()));
+            notifyError("下载并解包 dsh 运行时失败", String.valueOf(e.getMessage()));
         } finally {
-            unpackButton.setText("立即解包");
+            unpackButton.setText("下载运行时");
             refreshRuntimeInfo();
         }
     }
@@ -611,7 +583,7 @@ public final class DshSettingsConfigurable implements Configurable {
         Path root = rt.runtimeRootFor((DshRuntimeLocation) runtimeLocationCombo.getSelectedItem());
         int answer = Messages.showYesNoDialog(
                 "确定要删除运行时目录吗？\n\n" + root + "\n\n"
-                        + "内置基线会在下次启动时重新解包（约几十秒），热更新下载的版本会被一并删除。",
+                        + "已下载的运行时会在下次启动时按需重新下载（首次约几十秒），已下载的版本会被一并删除。",
                 "清理 dsh 运行时", Messages.getQuestionIcon());
         if (answer != Messages.YES) {
             return;

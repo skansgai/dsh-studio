@@ -2,7 +2,6 @@ package com.deepseek.dshstudio.runtime;
 
 import com.deepseek.dshstudio.settings.DshSettingsState;
 import com.deepseek.dshstudio.util.DshUtil;
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -28,60 +27,49 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 
 /**
- * 内置 dsh 运行时的解包与解析。
+ * dsh 运行时的解析与安装。
  *
- * <h2>为什么要有它</h2>
- * 插件包里的 {@code dsh-runtime/dsh-runtime.zip} 是一棵裁剪过的 {@code node_modules}，
- * 里面含 dsh 及其全部依赖（含各平台原生模块）。它让用户「装上就能用」，不必先等
- * {@code npx} 下载十几分钟。zip 不能直接执行，所以首次使用时解包到用户目录。
+ * <h2>为什么不再内置运行时</h2>
+ * 早期版本把一份裁剪过的 dsh（含全部 Node 依赖，约 80MB）打进插件包，换来「装上即用、不用等
+ * npx 下载十几分钟」。但这带来几个持续代价：插件包体积从 115KB 涨到 80+MB（每次小版本发布都要
+ * 全量重下）、5 个平台里 4 份对用户是浪费、还把第三方原生二进制运行时带进了插件包的供应链 /
+ * 安全审查面。对于高频发小版本的节奏，前两者尤其不可接受。
+ *
+ * <h2>现在的做法</h2>
+ * 插件包保持 ~115KB。首次启动时复用已经写好的<b>热更新</b>链路：检测到本地没有 dsh
+ * → 从本仓库的 GitHub Release 拉取<b>当前平台</b>的包（约 41MB）→ sha256 校验
+ * → 原子解包安装 → 启动。原始问题（284MB / 十几分钟的 npx 拉取）照样解决，首次体验只是
+ * 「等一次 41MB 下载」，比内置方案只差一个网络请求；而插件包体积、分发与每次小版本发布的下载
+ * 成本都不受影响。访问不了 GitHub Release 的极少数环境，可手动下载 Release 页上的「全平台离线包」
+ * 导入，不必让所有人都背 80MB。
  *
  * <h2>目录布局</h2>
  * <pre>
- * ~/.dshstudio/runtime/
- *   ├─ baseline-&lt;stamp&gt;/        内置基线（由插件包解出，只读语义）
- *   ├─ baseline-&lt;stamp&gt;.tmp/    解包中的临时目录，中断后下次自动清理
- *   └─ &lt;dshVersion&gt;/            运行时热更新下载的版本（优先级更高）
+ * ~/.dshstudio/runtime/        （或 Windows 上的系统临时目录）
+ *   └─ &lt;dshVersion&gt;/         运行时（下载后解包，自动模式优先使用）
  * </pre>
- * {@code stamp} 来自构建产物 zip 的 sha256 前缀：dsh 版本、目标平台、sharp 模式、
- * 裁剪规则任一变化都会换一个新目录，因此「插件升级后要不要重新解包」是自动判断的，
- * 不需要额外记录状态。
  *
  * <h2>解析优先级</h2>
- * 热更新版本 → 内置基线 → 系统 dsh（见 {@link DshRuntimeMode}）。
+ * 已下载（热更新）版本 → 系统 dsh（npx）。见 {@link DshRuntimeMode}。
  */
 public final class DshRuntimeManager {
 
     private static final Logger LOG = Logger.getInstance(DshRuntimeManager.class);
 
-    /** 插件包里的运行时压缩包。 */
-    private static final String ZIP_RESOURCE = "/dsh-runtime/dsh-runtime.zip";
-
-    /**
-     * 插件包里的运行时元数据（由 Gradle 的 bundleDshRuntime 生成）。
-     * <p>
-     * 扩展名是 {@code .txt} 而不是 {@code .json}：内容就是 JSON，但企业里的透明加密
-     * 客户端（DLP）会按扩展名把 {@code .json} 加密，构建产物一旦变密文就会被打进插件包，
-     * 导致这里读不到自己的元数据。换成 {@code .txt} 绕开（构建期还有一道兜底校验）。
-     */
-    private static final String META_RESOURCE = "/dsh-runtime/runtime-meta.txt";
-
-    /** 解包完成标记，内容为 stamp；存在即代表这棵树是完整的。 */
+    /** 解包完成标记，内容为 zip 的 sha256 前 8 位（stamp）；存在即代表这棵树是完整的。 */
     static final String UNPACK_MARKER = ".unpacked-ok";
 
     /** 需要可执行位的文件清单（zip 不保留 Unix 权限位）。 */
@@ -93,10 +81,7 @@ public final class DshRuntimeManager {
     /** dsh 的 package.json（相对运行时根目录），用于读取版本号。 */
     static final String DSH_PACKAGE = "node_modules/@deepseek-ai/dsh/package.json";
 
-    /** 内置基线目录的前缀；热更新目录用版本号命名，据此区分。 */
-    private static final String BASELINE_PREFIX = "baseline-";
-
-    /** 解包时的读缓冲；18k 个小文件，缓冲大一点能明显少几次系统调用。 */
+    /** 解包时的读缓冲；1.8 万个小文件，缓冲大一点能明显少几次系统调用。 */
     private static final int COPY_BUFFER = 1 << 16;
 
     /**
@@ -160,7 +145,7 @@ public final class DshRuntimeManager {
         nodeExecutableOverride = exe;
     }
 
-    /** 最近一次 {@link #resolve} 留下的降级说明（如「内置运行时被 DLP 加密，已回退系统 dsh」）；消费后清空。 */
+    /** 最近一次 {@link #resolve} 留下的降级说明（如「已下载的运行时被 DLP 加密，已回退系统 dsh」）；消费后清空。 */
     private volatile String lastResolveNote;
 
     /** 读取并清空最近一次 resolve 留下的说明（{@code null} 表示没有）。 */
@@ -174,116 +159,9 @@ public final class DshRuntimeManager {
     /** 运行时可读性自检结果缓存（按目录），避免一次会话里反复拉起 node。 */
     private static final Map<Path, Boolean> NODE_READABLE_CACHE = new ConcurrentHashMap<>();
 
-    private final Object metaLock = new Object();
-    private volatile boolean metaResolved;
-    @Nullable
-    private volatile Meta metaCache;
-
     @NotNull
     public static DshRuntimeManager getInstance() {
         return ApplicationManager.getApplication().getService(DshRuntimeManager.class);
-    }
-
-    // ── 元数据 ────────────────────────────────────────────────────────────
-
-    /** 插件包内置运行时的元数据。 */
-    public static final class Meta {
-        /** 内置的 dsh 版本，如 {@code 0.1.2-rc.1}。 */
-        public final String dshVersion;
-        /** 产物指纹（zip 的 sha256 前 8 位），同时用作解包目录名。 */
-        public final String stamp;
-        /** 构建时使用的 sharp 模式：native / hybrid / wasm。 */
-        public final String sharp;
-        /** 打包进去的目标平台，如 win32-x64。 */
-        public final List<String> targets;
-        /** 压缩包内的文件数（用于进度百分比）。 */
-        public final int entries;
-        /** 解包后的字节数（用于展示磁盘占用）。 */
-        public final long unpackedBytes;
-        /** 构建时间（ISO-8601）。 */
-        public final String builtAt;
-
-        Meta(String dshVersion, String stamp, String sharp, List<String> targets,
-             int entries, long unpackedBytes, String builtAt) {
-            this.dshVersion = dshVersion;
-            this.stamp = stamp;
-            this.sharp = sharp;
-            this.targets = targets;
-            this.entries = entries;
-            this.unpackedBytes = unpackedBytes;
-            this.builtAt = builtAt;
-        }
-    }
-
-    /**
-     * 读取内置运行时元数据；插件包里没有运行时（例如开发期用
-     * {@code -Pdsh.runtime.skip=true} 构建）时返回 {@code null}。
-     */
-    @Nullable
-    public Meta bundledMeta() {
-        if (metaResolved) {
-            return metaCache;
-        }
-        synchronized (metaLock) {
-            if (metaResolved) {
-                return metaCache;
-            }
-            metaCache = readMeta();
-            metaResolved = true;
-            return metaCache;
-        }
-    }
-
-    @Nullable
-    private static Meta readMeta() {
-        try (InputStream in = DshRuntimeManager.class.getResourceAsStream(META_RESOURCE)) {
-            if (in == null) {
-                LOG.info("[dsh-runtime] 插件包中没有内置运行时（" + META_RESOURCE + " 不存在）");
-                return null;
-            }
-            String json = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            JsonObject o = JsonParser.parseString(json).getAsJsonObject();
-            List<String> targets = new ArrayList<>();
-            JsonElement t = o.get("targets");
-            if (t != null && t.isJsonArray()) {
-                JsonArray arr = t.getAsJsonArray();
-                for (JsonElement e : arr) {
-                    targets.add(e.getAsString());
-                }
-            }
-            return new Meta(
-                    str(o, "dshVersion", ""),
-                    str(o, "stamp", ""),
-                    str(o, "sharp", ""),
-                    targets,
-                    num(o, "entries", 0),
-                    num(o, "unpackedBytes", 0L),
-                    str(o, "builtAt", ""));
-        } catch (Exception e) {
-            LOG.warn("[dsh-runtime] 内置运行时元数据解析失败", e);
-            return null;
-        }
-    }
-
-    private static String str(JsonObject o, String key, String def) {
-        JsonElement e = o.get(key);
-        return (e == null || e.isJsonNull()) ? def : e.getAsString();
-    }
-
-    private static int num(JsonObject o, String key, int def) {
-        try {
-            return o.has(key) ? o.get(key).getAsInt() : def;
-        } catch (Exception e) {
-            return def;
-        }
-    }
-
-    private static long num(JsonObject o, String key, long def) {
-        try {
-            return o.has(key) ? o.get(key).getAsLong() : def;
-        } catch (Exception e) {
-            return def;
-        }
     }
 
     // ── 目录 ──────────────────────────────────────────────────────────────
@@ -294,7 +172,7 @@ public final class DshRuntimeManager {
      * 默认（{@link DshRuntimeLocation#AUTO}）在 Windows 上落在系统临时目录，其余平台落在
      * 用户主目录。这不是随手定的 —— 实测企业安全软件（DLP）按路径范围做透明加密，
      * 用户目录 / 项目目录下写一个小文件要 ~85 ms（11 个/秒），而临时目录被排除在外
-     * （2500 个/秒）。内置运行时 1.8 万个文件，两者的首次解包耗时相差 **27 分钟 vs 6 秒**。
+     * （2500 个/秒）。dsh 运行时解包后约 1.8 万个文件，两者的首次落地耗时相差 **27 分钟 vs 6 秒**。
      * 位置可在 设置 → DeepSeek Harness → 运行时 里改。
      */
     @NotNull
@@ -346,54 +224,30 @@ public final class DshRuntimeManager {
         return homeRoot();
     }
 
-    /** 内置基线的解包目录（无论是否已解包）。 */
+    /**
+     * 解析 dsh 的数据目录（DSH_HOME）：dsh 把 profiles 与 node_modules.lock 放在这里。
+     * <p>
+     * 默认落到运行时根的 {@code .dsh} 子目录，而不是用户主目录的 {@code ~/.dsh} ——
+     * 后者在本机被企业 DLP 透明加密，node 写入会被异步加密、读锁会因加密队列卡死
+     * （实测 {@code atomic-write: timed out waiting for the writer lock}）。运行时根在 Windows 上
+     * 默认是系统临时目录（DLP 排除范围），因此把 DSH_HOME 也放在这里能彻底绕开这个坑。
+     * <p>
+     * 用户若在设置里显式填了 DSH_HOME，则优先用他填的值。
+     */
     @NotNull
-    public Path baselineDir(@NotNull Meta meta) {
-        return runtimeRoot().resolve(BASELINE_PREFIX + meta.stamp);
-    }
-
-    /** 当前生效的内置基线目录；未解包时返回 {@code null}。 */
-    @Nullable
-    public Path unpackedBaselineDir() {
-        Meta meta = bundledMeta();
-        if (meta == null || meta.stamp.isEmpty()) {
-            return null;
+    public String resolveDshHome(@NotNull DshSettingsState settings) {
+        if (settings.dshHome != null && !settings.dshHome.trim().isEmpty()) {
+            return settings.dshHome.trim();
         }
-        Path dir = baselineDir(meta);
-        return isUnpacked(dir, meta) ? dir : null;
-    }
-
-    /** 内置基线是否已解包完成。 */
-    public boolean isBaselineUnpacked() {
-        return unpackedBaselineDir() != null;
-    }
-
-    /** 内置运行时是否覆盖当前平台（决定能不能真的用它）。 */
-    public boolean isHostPlatformBundled() {
-        Meta meta = bundledMeta();
-        return meta != null && meta.targets.contains(DshUtil.hostTarget());
-    }
-
-    private static boolean isUnpacked(@NotNull Path dir, @NotNull Meta meta) {
-        Path marker = dir.resolve(UNPACK_MARKER);
-        if (!Files.isRegularFile(marker)) {
-            return false;
-        }
-        try {
-            return Files.readString(marker, StandardCharsets.UTF_8).trim().equals(meta.stamp);
-        } catch (IOException e) {
-            return false;
-        }
+        return runtimeRoot().resolve(".dsh").toString();
     }
 
     // ── 解析 ──────────────────────────────────────────────────────────────
 
     /** 运行时来源。 */
     public enum Source {
-        /** 用户目录里的热更新版本。 */
-        HOT_UPDATE("热更新版本"),
-        /** 插件包内置的基线版本。 */
-        BUNDLED("内置运行时"),
+        /** 用户目录里的已下载（热更新）运行时。 */
+        HOT_UPDATE("已下载运行时"),
         /** 系统 PATH 上的 dsh（npx）。 */
         SYSTEM("系统 dsh");
 
@@ -415,7 +269,7 @@ public final class DshRuntimeManager {
         public final Path dir;
         /** 启动命令前缀，例如 {@code [node, .../lib/bin.js]} 或 {@code [npx, --yes, @deepseek-ai/dsh]}。 */
         public final List<String> prefix;
-        /** 解析时发生的「降级 / 告警」说明（例如内置运行时被加密后回退到系统 dsh）；正常为 {@code null}。 */
+        /** 解析时发生的「降级 / 告警」说明（例如已下载运行时被加密后回退到系统 dsh）；正常为 {@code null}。 */
         @Nullable
         public final String warning;
 
@@ -432,13 +286,13 @@ public final class DshRuntimeManager {
     /**
      * 纯解析：决定这次启动用哪一份 dsh。
      * <p>
-     * 需要内置运行时但尚未解包时，返回 {@link Source#SYSTEM} 之外的兜底结果会不准 ——
-     * 所以调用方应先调 {@link #prepare(Project, DshRuntimeMode)} 保证运行时可用。
+     * 需要首次下载时，调用方应先调 {@link #prepare(Project, DshRuntimeMode)} 把运行时拉下来；
+     * 这里只负责「用哪一份」。
      * <p>
-     * 选定内置 / 热更新运行时后，本方法会用 node 自身验证这份运行时能否被读取
+     * 选定已下载运行时后，本方法会用 node 自身验证这份运行时能否被读取
      * （见 {@link #nodeCanReadRuntime}）——这是发现本机透明加密（DLP）把解包出的文件加密的
      * 唯一可靠手段（java 永远读到明文，靠 java 侧自检查不出）。验证失败时在「自动」模式下
-     * 静默回退系统 dsh 并记下说明，在「仅内置」模式下直接抛出可操作的异常。
+     * 静默回退系统 dsh 并记下说明，供启动流程提示用户。
      */
     @NotNull
     public Launch resolve(@NotNull DshRuntimeMode mode) {
@@ -446,68 +300,24 @@ public final class DshRuntimeManager {
             return systemLaunch(null);
         }
 
-        Meta meta = bundledMeta();
-        boolean usable = meta != null && isHostPlatformBundled();
-
-        // 热更新版本只在「自动」模式下参与竞争：「仅内置」是它的回滚出口。
-        if (mode == DshRuntimeMode.AUTO) {
-            Path hot = hotUpdateDir();
-            if (hot != null) {
-                String version = readVersion(hot);
-                if (version != null) {
-                    if (nodeCanReadRuntime(hot)) {
-                        return new Launch(Source.HOT_UPDATE, version, hot, nodePrefix(hot), null);
-                    }
-                    LOG.warn("[dsh-runtime] 热更新运行时无法被 node 读取（疑似本机透明加密），回退系统 dsh");
-                    lastResolveNote = "热更新运行时无法被 node 读取（疑似本机透明加密软件加密），已改用系统 dsh（npx）启动。"
-                            + "修复办法：在设置页把「运行时位置」改到未被加密的目录，或清理运行时后重试。";
-                    return systemLaunch(lastResolveNote);
-                }
-            }
-        }
-
-        if (usable) {
-            Path dir = baselineDir(meta);
-            if (isUnpacked(dir, meta)) {
-                if (nodeCanReadRuntime(dir)) {
-                    return new Launch(Source.BUNDLED, meta.dshVersion, dir, nodePrefix(dir), null);
+        // 自动模式：优先用已下载（热更新）的运行时
+        Path hot = hotUpdateDir();
+        if (hot != null) {
+            String version = readVersion(hot);
+            if (version != null) {
+                if (nodeCanReadRuntime(hot)) {
+                    return new Launch(Source.HOT_UPDATE, version, hot, nodePrefix(hot), null);
                 }
                 // 解包标记在、但 node 读不到：典型就是 DLP 把解包出的文件加密了。
-                if (mode == DshRuntimeMode.BUNDLED) {
-                    throw new IllegalStateException(
-                            "内置运行时已解包，但其中的文件被本机透明加密软件（DLP）加密，node 无法读取，"
-                                    + "运行时起不来。请在设置页把「运行时位置」改到未被加密的目录，"
-                                    + "或点「清理运行时」后重试，或把运行时来源改为「自动 / 仅系统 dsh」。");
-                }
-                LOG.warn("[dsh-runtime] 内置运行时无法被 node 读取（疑似 DLP 加密），回退系统 dsh");
-                lastResolveNote = "内置运行时已解包但无法被 node 读取（疑似本机透明加密软件加密），"
-                        + "已改用系统 dsh（npx）启动。修复办法：在设置页把「运行时位置」改到未被加密的目录，"
-                        + "或点「清理运行时」后重试。";
+                LOG.warn("[dsh-runtime] 已下载的运行时无法被 node 读取（疑似本机透明加密），回退系统 dsh");
+                lastResolveNote = "已下载的 dsh 运行时无法被 node 读取（疑似本机透明加密软件加密），已改用系统 dsh（npx）启动。"
+                        + "修复办法：在设置页把「运行时位置」改到未被加密的目录，或清理运行时后重试。";
                 return systemLaunch(lastResolveNote);
             }
         }
 
-        if (mode == DshRuntimeMode.BUNDLED) {
-            throw new IllegalStateException(bundledUnavailableReason(meta));
-        }
+        // 没有已下载的运行时、也拉不到（离线 / 发布渠道无本平台包）时，回退系统 dsh（npx）。
         return systemLaunch(null);
-    }
-
-    /** 「仅内置」模式下不可用时的原因说明（要能指导用户下一步怎么做）。 */
-    @NotNull
-    public String bundledUnavailableReason(@Nullable Meta meta) {
-        String reason;
-        if (meta == null) {
-            reason = "本插件的安装包中没有内置运行时（构建时跳过了 bundleDshRuntime）";
-        } else if (!meta.targets.contains(DshUtil.hostTarget())) {
-            reason = "内置运行时不含当前平台 " + DshUtil.hostTarget() + " 的原生模块"
-                    + "（仅含 " + String.join("、", meta.targets) + "）";
-        } else if (!isUnpacked(baselineDir(meta), meta)) {
-            reason = "内置运行时尚未解包完成";
-        } else {
-            reason = "内置运行时不可用";
-        }
-        return reason + "。请在 设置 → Tools → DeepSeek Harness → 运行时 中改为「自动」或「仅系统 dsh」。";
     }
 
     @NotNull
@@ -523,7 +333,7 @@ public final class DshRuntimeManager {
     }
 
     /**
-     * 用户目录里最新的热更新运行时；没有则返回 {@code null}。
+     * 用户目录里最新的已下载运行时；没有则返回 {@code null}。
      * <p>
      * 目录名即 dsh 版本号，按语义化版本取最大者。目录里没有 dsh 入口（下载中断的残骸）
      * 会被忽略，所以「下载中」的目录天然不会被选中。
@@ -539,7 +349,7 @@ public final class DshRuntimeManager {
         try (Stream<Path> stream = Files.list(root)) {
             for (Path dir : stream.toList()) {
                 String name = dir.getFileName().toString();
-                if (name.startsWith(BASELINE_PREFIX) || name.startsWith(".")) {
+                if (name.startsWith(".") || name.startsWith("baseline-")) {
                     continue;
                 }
                 if (!Files.isDirectory(dir) || !Files.isRegularFile(dir.resolve(DSH_ENTRY))) {
@@ -555,7 +365,7 @@ public final class DshRuntimeManager {
                 }
             }
         } catch (IOException e) {
-            LOG.warn("[dsh-runtime] 扫描热更新目录失败: " + root, e);
+            LOG.warn("[dsh-runtime] 扫描已下载运行时目录失败: " + root, e);
         }
         return best;
     }
@@ -577,124 +387,77 @@ public final class DshRuntimeManager {
         }
     }
 
-    // ── 解包 ──────────────────────────────────────────────────────────────
+    // ── 首次安装：从发布渠道下载 ──────────────────────────────────────────
 
     /**
-     * 保证运行时可用：需要内置基线且尚未解包时，弹一次带进度、可取消的解包过程。
+     * 保证运行时可用：首次启动时若本地没有 dsh，从发布渠道拉取当前平台的包并安装。
      * <p>
-     * 已解包 / 系统模式 / 平台不受支持（自动模式下）会立刻返回，不产生任何开销。
+     * 已下载 / 系统模式会立刻返回，不产生任何开销。下载是带进度、可取消的；用户取消视为失败，
+     * 由调用方决定要不要回退系统 dsh。
      *
-     * @throws IOException 解包失败或被用户取消
+     * @throws IOException 解包 / 校验失败（网络中断、包被截断等）或用户取消下载
      */
     public void prepare(@Nullable Project project, @NotNull DshRuntimeMode mode) throws IOException {
         if (mode == DshRuntimeMode.SYSTEM) {
             return;
         }
-        Meta meta = bundledMeta();
-        if (meta == null || !meta.targets.contains(DshUtil.hostTarget())) {
-            if (mode == DshRuntimeMode.BUNDLED) {
-                throw new IOException(bundledUnavailableReason(meta));
-            }
-            return; // 自动模式：回退到系统 dsh
-        }
-        if (isUnpacked(baselineDir(meta), meta)) {
+        // 已经有下载好的运行时，无需动作
+        if (hotUpdateDir() != null) {
             return;
         }
-        // 自动模式下已有热更新版本可用时，没必要为了基线去解包 80 MB
-        if (mode == DshRuntimeMode.AUTO && hotUpdateDir() != null) {
-            return;
-        }
-        unpackWithProgress(project, meta);
+        // 首次使用：从发布渠道拉取当前平台的运行时
+        downloadWithProgress(project);
     }
 
-    /** 弹模态进度解包（在 EDT 上）；已在后台线程时直接内联执行，避免嵌套模态框。 */
-    private void unpackWithProgress(@Nullable Project project, @NotNull Meta meta) throws IOException {
+    /** 弹模态进度下载（在 EDT 上）；已在后台线程时直接内联执行，避免嵌套模态框。 */
+    private void downloadWithProgress(@Nullable Project project) throws IOException {
         if (ApplicationManager.getApplication().isDispatchThread()) {
             AtomicReference<IOException> failure = new AtomicReference<>();
             boolean ok = ProgressManager.getInstance().runProcessWithProgressSynchronously(
                     () -> {
                         try {
-                            ensureBaseline(ProgressManager.getInstance().getProgressIndicator());
+                            DshRuntimeUpdater.UpdateInfo info =
+                                    DshRuntimeUpdater.getInstance().checkForUpdate();
+                            if (info == null) {
+                                LOG.info("[dsh-runtime] 没有可用的运行时发布（可能离线或发布渠道无本平台包），"
+                                        + "首次启动将改用系统 dsh");
+                                return;
+                            }
+                            DshRuntimeUpdater.getInstance().downloadAndInstall(
+                                    info, ProgressManager.getInstance().getProgressIndicator());
                         } catch (IOException e) {
                             failure.set(e);
                         }
                     },
-                    TITLE, true, project);
+                    DOWNLOAD_TITLE, true, project);
             if (failure.get() != null) {
                 throw failure.get();
             }
             if (!ok) {
-                throw new IOException("已取消解包内置 dsh 运行时");
+                throw new IOException("已取消下载 dsh 运行时");
             }
             return;
         }
-        ensureBaseline(ProgressManager.getInstance().getProgressIndicator());
+        DshRuntimeUpdater.UpdateInfo info = DshRuntimeUpdater.getInstance().checkForUpdate();
+        if (info == null) {
+            LOG.info("[dsh-runtime] 没有可用的运行时发布（可能离线或发布渠道无本平台包），"
+                    + "首次启动将改用系统 dsh");
+            return;
+        }
+        DshRuntimeUpdater.getInstance().downloadAndInstall(
+                info, ProgressManager.getInstance().getProgressIndicator());
     }
 
-    private static final String TITLE = "正在准备内置 dsh 运行时（仅首次）";
+    private static final String DOWNLOAD_TITLE = "正在下载 dsh 运行时（首次启动，约 41MB）";
 
-    /**
-     * 解包内置基线到 {@code ~/.dshstudio/runtime/baseline-<stamp>}；已存在则立即返回。
-     * <p>
-     * 先解到 {@code .tmp} 再整体改名，所以中途被杀掉也不会留下「看起来完整」的树。
-     *
-     * @return 解包后的运行时目录
-     */
-    @NotNull
-    public Path ensureBaseline(@Nullable ProgressIndicator indicator) throws IOException {
-        Meta meta = bundledMeta();
-        if (meta == null || meta.stamp.isEmpty()) {
-            throw new IOException("插件包中没有内置 dsh 运行时");
-        }
-        Path target = baselineDir(meta);
-        if (isUnpacked(target, meta)) {
-            return target;
-        }
-
-        Path root = runtimeRoot();
-        Files.createDirectories(root);
-
-        Path tmp = root.resolve(BASELINE_PREFIX + meta.stamp + ".tmp");
-        deleteRecursively(tmp);
-        deleteRecursively(target); // 上次解包中途失败的半成品
-
-        long started = System.currentTimeMillis();
-        try {
-            Files.createDirectories(tmp);
-            try (InputStream in = DshRuntimeManager.class.getResourceAsStream(ZIP_RESOURCE)) {
-                if (in == null) {
-                    throw new IOException("插件包中缺少 " + ZIP_RESOURCE);
-                }
-                extractZip(in, tmp, meta.entries, indicator);
-            }
-            verifyExtractedTree(tmp);
-            Files.writeString(tmp.resolve(UNPACK_MARKER), meta.stamp, StandardCharsets.UTF_8);
-            applyExecutableBits(tmp);
-            moveInto(tmp, target);
-        } catch (ProcessCanceledException canceled) {
-            // 用户取消：清掉半成品并把取消原样抛出去，让进度框干净地关掉
-            deleteRecursivelyQuietly(tmp);
-            throw canceled;
-        } catch (Throwable t) {
-            deleteRecursivelyQuietly(tmp);
-            if (t instanceof IOException) {
-                throw (IOException) t;
-            }
-            throw new IOException("解包内置 dsh 运行时失败: " + t.getMessage(), t);
-        }
-
-        LOG.info("[dsh-runtime] 已解包内置运行时 " + meta.dshVersion + " 到 " + target
-                + "（" + (System.currentTimeMillis() - started) + " ms）");
-        cleanupOldBaselines(root, meta.stamp);
-        return target;
-    }
+    // ── 解包校验 ──────────────────────────────────────────────────────────
 
     /**
      * 解包后的抽样自检：入口脚本必须能当 UTF-8 读出来、且不是安全软件加密后的密文。
      * <p>
      * 为什么需要它：企业里的透明加密客户端（DLP，本机实测 E-SafeNet）会按扩展名把
      * {@code .js} / {@code .ts} / {@code .json} 就地加密。实测把运行时解包到临时目录后，
-     * 18390 个文件里有 64% 变成密文，node 读到的是乱码，启动时只会抛一堆看不懂的解析
+     * 1.8 万个文件里可能有相当比例变成密文，node 读到的是乱码，启动时只会抛一堆看不懂的解析
      * 错误。与其把那些错误甩给用户，不如在这里失败并说清原因和出路。
      * <p>
      * 只查一个文件（入口），成本可以忽略；查不出「部分文件被加密」的极端情况，
@@ -703,7 +466,7 @@ public final class DshRuntimeManager {
     static void verifyExtractedTree(@NotNull Path root) throws IOException {
         Path entry = root.resolve(DSH_ENTRY);
         if (!Files.isRegularFile(entry)) {
-            throw new IOException("内置 dsh 运行时解包不完整：缺少入口脚本 " + DSH_ENTRY
+            throw new IOException("dsh 运行时解包不完整：缺少入口脚本 " + DSH_ENTRY
                     + "。请在「设置 → 工具 → DeepSeek Harness → 运行时」里点「清理运行时」后重试。");
         }
 
@@ -714,7 +477,7 @@ public final class DshRuntimeManager {
         }
         if (read > 0 && new String(head, 0, read, StandardCharsets.ISO_8859_1)
                 .contains(CIPHERTEXT_MARKER)) {
-            throw new IOException("内置 dsh 运行时解包后的文件被本机的透明加密软件（DLP）"
+            throw new IOException("dsh 运行时解包后的文件被本机的透明加密软件（DLP）"
                     + "加密了，node 无法读取，运行时起不来。这不是插件的问题：请让 IT 把运行时目录"
                     + "（设置页「运行时目录」一栏显示的路径）加入 DLP 排除名单，"
                     + "或在设置页把「运行时位置」改到未被加密的目录后重试。");
@@ -724,12 +487,12 @@ public final class DshRuntimeManager {
         try {
             text = Files.readString(entry, StandardCharsets.UTF_8);
         } catch (MalformedInputException e) {
-            throw new IOException("内置 dsh 运行时解包后的入口脚本不是合法的 UTF-8，"
+            throw new IOException("dsh 运行时解包后的入口脚本不是合法的 UTF-8，"
                     + "文件可能在写入过程中被安全软件改写或截断。"
                     + "请在设置页点「清理运行时」后重试。", e);
         }
         if (!text.startsWith(ENTRY_SHEBANG)) {
-            throw new IOException("内置 dsh 运行时解包后的入口脚本内容异常（不以 " + ENTRY_SHEBANG
+            throw new IOException("dsh 运行时解包后的入口脚本内容异常（不以 " + ENTRY_SHEBANG
                     + " 开头），解包结果不可信。请在设置页点「清理运行时」后重试。");
         }
     }
@@ -800,7 +563,7 @@ public final class DshRuntimeManager {
         byte[] buf = new byte[COPY_BUFFER];
         if (indicator != null) {
             indicator.setIndeterminate(false);
-            indicator.setText(TITLE);
+            indicator.setText(DOWNLOAD_TITLE);
             indicator.setFraction(0);
         }
         try (ZipInputStream zis = new ZipInputStream(new BufferedInputStream(in, COPY_BUFFER))) {
@@ -898,22 +661,6 @@ public final class DshRuntimeManager {
         }
     }
 
-    /** 删掉其它 stamp 的基线目录，避免插件多次升级后磁盘上堆积多份运行时。 */
-    private static void cleanupOldBaselines(@NotNull Path root, @NotNull String keepStamp) {
-        String keep = BASELINE_PREFIX + keepStamp;
-        try (Stream<Path> stream = Files.list(root)) {
-            for (Path dir : stream.toList()) {
-                String name = dir.getFileName().toString();
-                if (!name.startsWith(BASELINE_PREFIX) || name.equals(keep)) {
-                    continue;
-                }
-                deleteRecursivelyQuietly(dir);
-            }
-        } catch (IOException ignored) {
-            // 清理失败不影响使用
-        }
-    }
-
     /** 删除整个运行时目录（设置页「清理运行时」用）。 */
     public void clear(@NotNull Path root) throws IOException {
         deleteRecursively(root);
@@ -945,6 +692,11 @@ public final class DshRuntimeManager {
         } catch (IOException e) {
             LOG.info("[dsh-runtime] 清理目录失败（不影响使用）: " + root + " — " + e.getMessage());
         }
+    }
+
+    private static String str(JsonObject o, String key, String def) {
+        JsonElement e = o.get(key);
+        return (e == null || e.isJsonNull()) ? def : e.getAsString();
     }
 
     /** 人类可读的磁盘占用，用于设置页展示。 */

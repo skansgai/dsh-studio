@@ -152,7 +152,7 @@ public final class DshServerManager {
             setState(ServerState.FAILED);
             return;
         }
-        // 解析时若因 DLP 等原因从内置/热更新回退到系统 dsh，把原因告诉用户（不是失败，是降级）
+        // 解析时若因 DLP 等原因从已下载运行时回退到系统 dsh，把原因告诉用户（不是失败，是降级）
         String resolveNote = DshRuntimeManager.getInstance().consumeLastResolveNote();
         if (resolveNote != null && !resolveNote.isEmpty()) {
             appendLog("[dsh] " + resolveNote + "\n");
@@ -188,9 +188,8 @@ public final class DshServerManager {
                 ProcessBuilder pb = new ProcessBuilder(command);
                 pb.directory(new File(workdir));
                 pb.redirectErrorStream(true);
-                if (settings.dshHome != null && !settings.dshHome.trim().isEmpty()) {
-                    pb.environment().put("DSH_HOME", settings.dshHome.trim());
-                }
+                pb.environment().put("DSH_HOME",
+                        DshRuntimeManager.getInstance().resolveDshHome(settings));
                 appendLog("$ " + String.join(" ", command) + "   (cwd: " + workdir + ")\n");
                 launchToken = null;
                 Process p = pb.start();

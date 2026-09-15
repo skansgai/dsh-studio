@@ -10,18 +10,12 @@ import org.jetbrains.annotations.NotNull;
 public enum DshRuntimeMode {
 
     /**
-     * 自动（默认）：用户目录里的热更新版本 → 插件内置基线 → 系统 dsh（npx）。
+     * 自动（默认）：优先用已下载的（热更新）运行时；首次启动自动下载当前平台包；
+     * 下载不到（无网络 / 访问不了 GitHub Release）时回退系统 dsh（npx）。
      * <p>
      * 既保证「装上就能用」，又能在后台热更新到更新的 dsh 后自动用上新版。
      */
-    AUTO("auto", "自动（优先内置运行时）"),
-
-    /**
-     * 仅内置运行时：忽略用户目录里的热更新版本。
-     * <p>
-     * 热更新把版本弄坏时的逃生出口（等价于一次「回滚到内置基线」）。
-     */
-    BUNDLED("bundled", "仅内置运行时"),
+    AUTO("auto", "自动（优先已下载运行时）"),
 
     /** 仅系统 dsh：保持插件 0.3.x 以前的行为，用 {@code npx --yes @deepseek-ai/dsh} 启动。 */
     SYSTEM("system", "仅系统 dsh（npx）");

@@ -2,105 +2,128 @@ package com.deepseek.dshstudio.runtime;
 
 import org.junit.Test;
 
-import java.io.InputStream;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assume.assumeTrue;
 
 /**
- * 内置运行时的解包集成测试：直接拿插件包里的真 zip 解一遍。
+ * {@link DshRuntimeManager} 的纯逻辑测试（不依赖网络、不依赖 IDE 运行时）。
  * <p>
- * 这是整条链路里最容易出错、又最难在用户机器上复现的一步（zip slip、目录层级、
- * 1.8 万个文件的完整性），所以不做成 mock，而是真的解包一次并校验关键文件。
- * <p>
- * 解到系统临时目录：一是快（实测 2500 文件/秒，用户目录只有 11 个/秒），
- * 二是不会污染仓库。用 {@code -Pdsh.runtime.skip=true} 构建时没有 zip，测试自动跳过。
+ * 早期版本把一份裁剪过的 dsh（约 80MB / 1.8 万个文件）打进插件包，这里的集成测试直接解包那份真
+ * zip。0.4.2 起插件包不再内置运行时，所以改成：用内存里造的小 zip 测解包逻辑，用纯 Java 的
+ * {@link DshRuntimeManager#verifyExtractedTree} 测 DLP 加密自检（不需要 node）。
  */
 public class DshRuntimeManagerTest {
 
-    private static final String ZIP_RESOURCE = "/dsh-runtime/dsh-runtime.zip";
-    private static final String META_RESOURCE = "/dsh-runtime/runtime-meta.txt";
-
     @Test
-    public void metaIsConsistentWithZip() throws Exception {
-        try (InputStream zip = DshRuntimeManager.class.getResourceAsStream(ZIP_RESOURCE)) {
-            assumeTrue("构建时跳过了 bundleDshRuntime，跳过", zip != null);
-        }
-        try (InputStream in = DshRuntimeManager.class.getResourceAsStream(META_RESOURCE)) {
-            assertNotNull("有 zip 就必须有 runtime-meta.txt", in);
-            String json = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            assertTrue(json.contains("\"dshVersion\""));
-            assertTrue(json.contains("\"stamp\""));
-            assertTrue(json.contains("\"targets\""));
-            assertTrue(json.contains("\"entries\""));
-        }
+    public void humanSizeIsReadable() {
+        assertEquals("—", DshRuntimeManager.humanSize(0));
+        assertEquals("512 B", DshRuntimeManager.humanSize(512));
+        assertEquals("1.0 KB", DshRuntimeManager.humanSize(1024));
+        assertEquals("1.5 MB", DshRuntimeManager.humanSize(1024 * 1024 * 3 / 2));
     }
 
+    /**
+     * 解包逻辑：普通条目照常解出，zip slip 条目（{@code ../}）不能写到目标目录外。
+     * <p>
+     * 不依赖被 DLP 加密的真 zip —— 造一个最小 zip 即可覆盖「解包 + 路径穿越防护」。
+     */
     @Test
-    public void extractZipProducesUsableTree() throws Exception {
-        Path dest = null;
-        try (InputStream in = DshRuntimeManager.class.getResourceAsStream(ZIP_RESOURCE)) {
-            assumeTrue("构建时跳过了 bundleDshRuntime，跳过", in != null);
-            dest = Files.createTempDirectory("dsh-runtime-it");
+    public void extractZipSkipsEntriesThatEscapeTargetDirectory() throws Exception {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (ZipOutputStream zos = new ZipOutputStream(bos)) {
+            zos.putNextEntry(new ZipEntry("../escaped.txt"));
+            zos.write("pwned".getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+            zos.putNextEntry(new ZipEntry("ok.txt"));
+            zos.write("ok".getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+            zos.putNextEntry(new ZipEntry(DshRuntimeManager.DSH_ENTRY));
+            zos.write("#!/usr/bin/env node\n".getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+        }
 
-            DshRuntimeManager.extractZip(in, dest, 0, null);
-
-            // 入口脚本必须存在，否则启动命令无从下手
-            Path entry = dest.resolve("node_modules/@deepseek-ai/dsh/lib/bin.js");
-            assertTrue("缺少 dsh 入口: " + entry, Files.isRegularFile(entry));
-
-            // 入口里的内容应该是真的 JS，而不是被截断/写坏的文件。
-            //
-            // 注意：本机若装了 DLP（如 E-SafeNet）透明加密客户端，它会按扩展名把
-            // .js/.ts/.json 加密，解包出来的 1.8 万个文件里约 64% 会变成密文
-            // （文件头是 "E-SafeNet"），node 读到的是密文 → 运行时不可用。
-            // 那是环境问题不是代码问题，这里只跳过内容校验（文件数校验仍然执行），
-            // 避免把环境问题误报成代码回归。
-            if (isEncryptedByDlp(entry)) {
-                System.out.println("[跳过] 解包出的入口文件被 DLP 加密了，"
-                        + "跳过内容校验；本机内置运行时无法直接运行，"
-                        + "详见 docs/design-bundled-runtime.md");
-            } else {
-                String head = Files.readString(entry, StandardCharsets.UTF_8);
-                assertTrue("入口内容异常", head.contains("#!/usr/bin/env node"));
+        Path dest = Files.createTempDirectory("dsh-runtime-it");
+        try {
+            DshRuntimeManager.extractZip(new ByteArrayInputStream(bos.toByteArray()), dest, 3, null);
+            assertTrue("正常条目照常解出", Files.isRegularFile(dest.resolve("ok.txt")));
+            assertTrue("dsh 入口照常解出", Files.isRegularFile(dest.resolve(DshRuntimeManager.DSH_ENTRY)));
+            Path escaped = dest.getParent().resolve("escaped.txt");
+            try {
+                assertTrue("zip slip 条目不能写到目标目录外: " + escaped, !Files.exists(escaped));
+            } finally {
+                Files.deleteIfExists(escaped);
             }
-
-            // 可执行位清单（非 Windows 上解包后会据此 chmod）
-            assertTrue("缺少可执行位清单",
-                    Files.isRegularFile(dest.resolve(".dsh-runtime-executables")));
-
-            // 文件数与 zip 内的条目数一致 —— 少一个都可能在用户机器上表现为「缺包」
-            long extracted;
-            try (Stream<Path> walk = Files.walk(dest)) {
-                extracted = walk.filter(Files::isRegularFile).count();
-            }
-            assertTrue("解出的文件数明显偏少: " + extracted, extracted > 15000);
         } finally {
             deleteQuietly(dest);
         }
     }
 
     /**
-     * 判断文件是否被 DLP 透明加密客户端（E-SafeNet 等）加了密。
-     * <p>
-     * 这类客户端会在文件头写入固定的明文标识，读到它就说明拿到的是密文而不是源码。
+     * 入口脚本合法（以 {@code #!} 开头、是合法 UTF-8）时自检通过。
      */
-    private static boolean isEncryptedByDlp(Path file) throws Exception {
-        byte[] head = new byte[64];
-        try (InputStream in = Files.newInputStream(file)) {
-            int read = in.read(head);
-            if (read <= 0) {
-                return false;
-            }
-            return new String(head, 0, read, StandardCharsets.ISO_8859_1).contains("E-SafeNet");
+    @Test
+    public void verifyExtractedTreeAcceptsValidEntry() throws Exception {
+        Path dir = Files.createTempDirectory("dsh-verify-ok");
+        try {
+            Path entry = dir.resolve(DshRuntimeManager.DSH_ENTRY);
+            Files.createDirectories(entry.getParent());
+            Files.writeString(entry, "#!/usr/bin/env node\nconsole.log('dsh');\n",
+                    StandardCharsets.UTF_8);
+            DshRuntimeManager.verifyExtractedTree(dir); // 不应抛异常
+        } finally {
+            deleteQuietly(dir);
+        }
+    }
+
+    /**
+     * 入口脚本被本机透明加密（DLP，文件头是 {@code E-SafeNet}）时，自检必须当场拒收并说清原因。
+     * <p>
+     * 这是 0.4.1 修过的场景：解包出的文件被加密后 node 读到的是密文，与其把一堆看不懂的解析错误
+     * 甩给用户，不如在这里失败并指引出路。
+     */
+    @Test
+    public void verifyExtractedTreeRejectsEncryptedEntry() throws Exception {
+        Path dir = Files.createTempDirectory("dsh-verify-cipher");
+        try {
+            Path entry = dir.resolve(DshRuntimeManager.DSH_ENTRY);
+            Files.createDirectories(entry.getParent());
+            Files.writeString(entry, "E-SafeNet 这不是 JS 而是密文",
+                    StandardCharsets.UTF_8);
+            IOException e = assertThrows(IOException.class,
+                    () -> DshRuntimeManager.verifyExtractedTree(dir));
+            assertTrue("要指出是透明加密导致: " + e.getMessage(),
+                    e.getMessage().contains("透明加密"));
+        } finally {
+            deleteQuietly(dir);
+        }
+    }
+
+    /**
+     * 入口脚本缺失时，自检报「解包不完整」而不是默默继续。
+     */
+    @Test
+    public void verifyExtractedTreeRejectsMissingEntry() throws Exception {
+        Path dir = Files.createTempDirectory("dsh-verify-missing");
+        try {
+            IOException e = assertThrows(IOException.class,
+                    () -> DshRuntimeManager.verifyExtractedTree(dir));
+            assertTrue("要指出是解包不完整: " + e.getMessage(),
+                    e.getMessage().contains("解包不完整"));
+        } finally {
+            deleteQuietly(dir);
         }
     }
 
@@ -121,13 +144,5 @@ public class DshRuntimeManagerTest {
         } catch (Exception ignored) {
             // 尽力而为
         }
-    }
-
-    @Test
-    public void humanSizeIsReadable() {
-        assertEquals("—", DshRuntimeManager.humanSize(0));
-        assertEquals("512 B", DshRuntimeManager.humanSize(512));
-        assertEquals("1.0 KB", DshRuntimeManager.humanSize(1024));
-        assertEquals("1.5 MB", DshRuntimeManager.humanSize(1024 * 1024 * 3 / 2));
     }
 }

@@ -24,7 +24,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.4.1"
+version = "0.4.2"
 
 repositories {
     mavenCentral()
@@ -117,6 +117,12 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
+            <h3>0.4.2</h3>
+            <ul>
+              <li><b>不再内置运行时，回到轻量插件包（约 115KB）</b>：内置五平台运行时会让每次小版本发布都全量重下 80+MB，且 5 个平台里 4 份对用户是浪费、还把第三方原生二进制带进了插件包的供应链/安全审查面。0.4.2 起插件包不再包含任何运行时。</li>
+              <li><b>首次启动改为下载当前平台包</b>：复用已有的热更新链路——检测到本地没有 dsh 时，从本仓库的 GitHub Release 拉取当前平台约 41MB 的包，sha256 校验通过后再原子解包安装并启动。首次体验只是「等一次 41MB 下载」；插件包体积、分发与每次小版本发布的下载成本都不受影响。访问不了 GitHub Release 的环境，可在 Release 页手动下载「全平台离线包」导入。</li>
+              <li>「运行时来源」去掉了「仅内置运行时」选项，保留「自动（优先已下载运行时，回退系统 dsh）」与「仅系统 dsh（npx）」。</li>
+            </ul>
             <h3>0.4.1</h3>
             <ul>
               <li><b>修复企业透明加密（DLP）下的启动失败</b>：部分环境会按读进程白名单把解包出的运行时文件加密，导致 node 加载 package.json 时报 ERR_INVALID_PACKAGE_CONFIG。现在改由 node 侧自检运行时是否可读：读不到就自动回退到系统 dsh（AUTO 模式）或在设置页给出操作指引（BUNDLED 模式），并在启动日志与通知栏提示。</li>
@@ -297,7 +303,7 @@ tasks {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 内置 dsh 运行时（bundleDshRuntime）
+// dsh 运行时打包（bundleDshRuntime：产物供 Release 离线包与 CI，不再打进 JAR）
 // ════════════════════════════════════════════════════════════════════════════
 //
 // 为什么：现在首次启动靠 `npx --yes @deepseek-ai/dsh` 现拉，实测要下约 284 MB、
@@ -1372,7 +1378,7 @@ val dshRuntimeNpmCommand: List<String> =
 
 val bundleDshRuntime = tasks.register<BundleDshRuntimeTask>("bundleDshRuntime") {
     group = "build"
-    description = "打包内置 dsh 运行时（裁剪后打进 JAR，免去首次 npx 下载等待）"
+    description = "打包 dsh 运行时（产物供 GitHub Release 离线包与 CI 使用，不再打进插件 JAR）"
     // 只在内置未关闭时参与构建
     onlyIf { providers.gradleProperty("dsh.runtime.skip").orNull != "true" }
     dshVersion.set(dshRuntimeVersion)
@@ -1388,30 +1394,3 @@ val bundleDshRuntime = tasks.register<BundleDshRuntimeTask>("bundleDshRuntime") 
     outputSplitDir.set(layout.buildDirectory.dir("dsh-runtime/split"))
 }
 
-// 把运行时 zip 与元数据作为资源打进 JAR：JAR 里只多两个条目，
-// 避免上万个小文件拖慢构建与加载。
-tasks.named<ProcessResources>("processResources") {
-    dependsOn(bundleDshRuntime)
-
-    // 兜底校验：万一安全软件连 .txt 也加密了，就在这里明确失败，
-    // 而不是把一个插件自己都读不懂的包发出去。
-    doFirst {
-        val meta = dshRuntimeMeta.get().asFile
-        if (meta.isFile && isDlpEncrypted(meta)) {
-            throw GradleException(
-                "runtime-meta 被本机的透明加密软件加密了（文件头 ${BundleDshRuntimeTask.DLP_MAGIC}）：" +
-                    meta.absolutePath + "\n" +
-                    "这样打进 JAR 后插件读不到自己的元数据。请把 build/ 加入 DLP 排除名单后重试。"
-            )
-        }
-    }
-
-    from(dshRuntimeZip) {
-        into("dsh-runtime")
-        rename { "dsh-runtime.zip" }
-    }
-    from(dshRuntimeMeta) {
-        into("dsh-runtime")
-        rename { "runtime-meta.txt" }
-    }
-}

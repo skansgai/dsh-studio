@@ -71,7 +71,7 @@ public final class DshHeadlessTaskAction extends AnAction {
         DshSettingsState settings = DshSettingsState.getInstance();
         String workdir = DshUtil.resolveWorkingDirectory(settings, project);
 
-        // 与启动服务器走同一条运行时准备路径（首次可能需要解包内置运行时）
+        // 与启动服务器走同一条运行时准备路径（首次可能需要下载 dsh 运行时）
         try {
             DshRuntimeManager.getInstance()
                     .prepare(project, DshRuntimeMode.fromId(settings.runtimeMode));
@@ -101,9 +101,8 @@ public final class DshHeadlessTaskAction extends AnAction {
                     ProcessBuilder pb = new ProcessBuilder(command);
                     pb.directory(new File(workdir));
                     pb.redirectErrorStream(true);
-                    if (settings.dshHome != null && !settings.dshHome.trim().isEmpty()) {
-                        pb.environment().put("DSH_HOME", settings.dshHome.trim());
-                    }
+                    pb.environment().put("DSH_HOME",
+                            DshRuntimeManager.getInstance().resolveDshHome(settings));
                     Process process = pb.start();
                     try (BufferedReader reader = new BufferedReader(
                             new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {

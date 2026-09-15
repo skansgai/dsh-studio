@@ -16,6 +16,7 @@ name: 发布 dsh 运行时（热更新渠道）
 # 资产（按平台拆分，插件只下自己那一份；整包压缩后 82.9 MB，拆开每平台约 41 MB，省 51%）：
 #   dsh-runtime-<target>.zip      target ∈ win32-x64 / darwin-x64 / darwin-arm64 / linux-x64 / linux-arm64
 #   runtime-meta-<target>.txt     对应的元数据（dshVersion / stamp / entries / unpackedBytes）
+#   dsh-runtime-all-platforms.zip  全平台合集（可选离线包，访问不了 GitHub Release 的环境用）
 
 on:
   schedule:
@@ -126,6 +127,12 @@ jobs:
       - name: 列出产物
         run: ls -lh build/dsh-runtime/ build/dsh-runtime/split/
 
+      - name: 打包全平台离线包（可选）
+        run: |
+          set -euo pipefail
+          cp build/dsh-runtime/dsh-runtime.zip build/dsh-runtime/dsh-runtime-all-platforms.zip
+          ls -lh build/dsh-runtime/dsh-runtime-all-platforms.zip
+
       - name: 生成发布说明
         env:
           VER: ${{ needs.check.outputs.version }}
@@ -137,6 +144,9 @@ jobs:
           由 bundleDshRuntime 构建，与插件内置基线走完全相同的裁剪与自检流程。
 
           各平台只下自己那一份：dsh-runtime-<target>.zip + runtime-meta-<target>.txt
+
+          需要离线安装或访问不了 GitHub Release 的环境，可下载全平台离线包
+          dsh-runtime-all-platforms.zip（含全部 5 个平台的运行时），解压到运行时目录即可。
           EOF
 
       - name: 发布 Release
@@ -148,4 +158,5 @@ jobs:
           gh release create "runtime-$VER" \
             --title "dsh 运行时 $VER" \
             --notes-file RELEASE_NOTES.md \
-            build/dsh-runtime/split/*.zip build/dsh-runtime/split/*.txt
+            build/dsh-runtime/split/*.zip build/dsh-runtime/split/*.txt \
+            build/dsh-runtime/dsh-runtime-all-platforms.zip
