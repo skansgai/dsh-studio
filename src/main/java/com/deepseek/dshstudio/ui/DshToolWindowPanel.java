@@ -409,6 +409,15 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
     private void onPageSync(@NotNull String json) {
         final String bg = extractJsonString(json, "bg"); // null = 本次未带该字段
         final double op = extractJsonNumber(json, "op"); // -1 = 本次未带该字段
+        final String diag = extractJsonString(json, "diag"); // 背景卡片注入诊断，仅排查用
+        if (diag != null) {
+            // 页面侧只在状态变化时回传，条数有上限，所以可以直接显示在日志区
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (!disposed) {
+                    appendPanelLog("[dsh] 背景卡片: " + diag + "\n");
+                }
+            });
+        }
         if (bg == null && op < 0) {
             return;
         }
@@ -432,6 +441,12 @@ public final class DshToolWindowPanel extends JBPanel<DshToolWindowPanel> implem
             }
             applyBackgroundImages(); // 同步 IDE 状态栏 / 空白页背景
         });
+    }
+
+    /** 往工具窗口日志区追加一行（页面回传的诊断信息用）。 */
+    private void appendPanelLog(@NotNull String line) {
+        logArea.append(line);
+        logArea.setCaretPosition(logArea.getDocument().getLength());
     }
 
     /** 取 JSON 里的字符串字段；字段不存在返回 null（区别于空串"已清空"）。 */

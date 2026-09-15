@@ -24,7 +24,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.4.2"
+version = "0.4.3"
 
 repositories {
     mavenCentral()
@@ -117,6 +117,13 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
+            <h3>0.4.3</h3>
+            <ul>
+              <li><b>修复「背景图设置第一次打开不出现」</b>：注入到 dsh 网页「通用设置」里的背景卡片，此前靠「页面上同时出现外观 + 语言两行」来判断是否停在通用设置页，而这两行由独立懒加载的客户端插件（dsh-client-ui-theme / dsh-client-locale）提供，首次打开时还没注册，于是判定为假、卡片不注入 —— 切一次语言让整页重渲染后才出现。现在改为看设置导航里高亮的是不是「通用设置」，并新增 MutationObserver，在设置面板渲染出来的那一刻就注入，不再等最多 2 秒的轮询。</li>
+              <li>功能行还没加载出来时，背景卡片退到内容区末尾显示，而不是完全不出现；同时避免 React 重绘后出现重复卡片。</li>
+              <li>设置弹窗的识别改为「可见 + 带设置内容标记」，不再盲取页面上第一个 role="dialog"，避免被其它浮层或提示节点干扰。</li>
+              <li>卡片注入失败时会在工具窗口日志里给出原因（no-settings-dialog / settings-page-mismatch 等），便于反馈定位。</li>
+            </ul>
             <h3>0.4.2</h3>
             <ul>
               <li><b>不再内置运行时，回到轻量插件包（约 115KB）</b>：内置五平台运行时会让每次小版本发布都全量重下 80+MB，且 5 个平台里 4 份对用户是浪费、还把第三方原生二进制带进了插件包的供应链/安全审查面。0.4.2 起插件包不再包含任何运行时。</li>

@@ -57,23 +57,108 @@
   }
 
   // —— 探测 dsh 设置弹窗与「通用设置」内容容器 ——
+  //
+  // 背景卡片只在「设置弹窗已打开 且 停在通用设置页」时注入。早期实现直接取
+  // document.querySelector('[role="dialog"]')，但页面上常有别的 dialog（浮层、提示、
+  // 残留节点），一旦取错就永远判定失败 —— 现象正是「第一次打开设置看不到卡片，
+  // 刷新或切一次语言后才出现」。这里改成按「可见 + 带设置内容标记」挑，并兼容英文界面。
 
+  var NAV_MARKERS = ['通用设置', 'General'];
+  var CONTENT_MARKERS = ['繁忙时 Enter 键行为', 'Enter 键行为', 'Enter behavior'];
+  var FIELD_MARKERS = [['外观', 'Appearance'], ['语言', 'Language']];
+  var ANCHOR_MARKERS = ['外观', 'Appearance', '繁忙时 Enter 键行为', 'Enter behavior'];
+
+  function visible(el) { return !!el && el.offsetWidth > 0 && el.offsetHeight > 0; }
+
+  function containsAny(text, list) {
+    for (var i = 0; i < list.length; i++) {
+      if (text.indexOf(list[i]) !== -1) return true;
+    }
+    return false;
+  }
+
+  /** 用原生 XPath 找「自身文本含某串」的元素：比 JS 遍历 textContent 快得多。 */
+  function findByOwnText(s) {
+    var out = [];
+    try {
+      var r = document.evaluate('//*[contains(text(),"' + s + '")]', document, null,
+        XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      for (var i = 0; i < r.snapshotLength; i++) out.push(r.snapshotItem(i));
+    } catch (e) { /* 忽略 */ }
+    return out;
+  }
+
+  /**
+   * 找设置弹窗根节点。结果缓存到 window.__dshDialogEl：
+   * 弹窗被隐藏时直接返回 null（说明设置没打开），不再每轮重新扫描，开销接近零。
+   */
   function findSettingsDialog() {
-    var d = document.querySelector('[role="dialog"]');
-    if (d) return d;
-    var all = document.querySelectorAll('*');
-    for (var i = 0; i < all.length; i++) {
-      var t = all[i].textContent || '';
-      if (t.indexOf('通用设置') !== -1 && all[i].children.length > 2 && all[i].offsetWidth > 200) {
-        return all[i];
+    var cached = window.__dshDialogEl;
+    if (cached) {
+      if (!document.contains(cached)) {
+        window.__dshDialogEl = null;          // React 换过节点：失效重找
+      } else if (!visible(cached)) {
+        return null;                          // 仍在 DOM 但被隐藏 = 设置没打开
+      } else {
+        return cached;
+      }
+    }
+
+    var cands = document.querySelectorAll('[role="dialog"], [class*="modal" i],'
+      + ' [class*="dialog" i], [class*="settings" i], [class*="drawer" i]');
+    var best = null, bestCount = 0;
+    // ① 首选：可见、且同时含导航项与内容区特有标签的最小节点
+    for (var i = 0; i < cands.length; i++) {
+      var el = cands[i];
+      if (!visible(el)) continue;
+      var t = el.textContent || '';
+      if (!containsAny(t, NAV_MARKERS) || !containsAny(t, CONTENT_MARKERS)) continue;
+      var n = el.querySelectorAll('*').length;
+      if (best === null || n < bestCount) { best = el; bestCount = n; }
+    }
+    if (best) { window.__dshDialogEl = best; return best; }
+
+    // ② 次选：可见且带导航标记
+    for (var j = 0; j < cands.length; j++) {
+      if (visible(cands[j]) && containsAny(cands[j].textContent || '', NAV_MARKERS)) {
+        window.__dshDialogEl = cands[j];
+        return cands[j];
+      }
+    }
+
+    // ③ 兜底：从「通用设置」导航项往上找同时含内容区标签的祖先
+    var navs = findByOwnText('通用设置').concat(findByOwnText('General'));
+    for (var m = 0; m < navs.length; m++) {
+      if (!visible(navs[m])) continue;
+      var up = navs[m];
+      for (var d = 0; d < 8 && up && up !== document.body; d++) {
+        if (containsAny(up.textContent || '', CONTENT_MARKERS)) {
+          window.__dshDialogEl = up;
+          return up;
+        }
+        up = up.parentElement;
       }
     }
     return null;
   }
 
+  /**
+   * 当前打开的是不是「通用设置」页。
+   * <p>首选看导航里高亮的当前项 —— 导航由设置外壳自己渲染，随时都在；
+   * 而「外观」「语言」这类功能行由独立懒加载的客户端插件提供，首次打开时可能还没注册，
+   * 用它们判断会假阴性（正是「第一次打开不出现、切一次语言才出现」的原因）。
+   * 导航结构拿不到时才退回按功能行文案判断，且中/英界面都认。
+   */
   function isGeneralPage(root) {
+    var active = root.querySelector('nav [aria-current="true"], nav [aria-current="page"]');
+    if (active) {
+      return containsAny((active.textContent || '').trim(), NAV_MARKERS);
+    }
     var t = root.textContent || '';
-    return t.indexOf('外观') !== -1 && t.indexOf('语言') !== -1;
+    for (var i = 0; i < FIELD_MARKERS.length; i++) {
+      if (!containsAny(t, FIELD_MARKERS[i])) return false;
+    }
+    return true;
   }
 
   function findMarker(root, markers) {
@@ -98,6 +183,16 @@
       el = el.parentElement;
     }
     return start ? start.parentElement : null;
+  }
+
+  /**
+   * 设置弹窗的内容区（面板里 nav 的兄弟节点）。拿不到就退回面板本身。
+   * 功能行还没加载出来时用它当兜底锚点，卡片依然会出现在页面上。
+   */
+  function findContentContainer(panel) {
+    var nav = panel.querySelector('nav');
+    if (nav && nav.nextElementSibling) return nav.nextElementSibling;
+    return panel;
   }
 
   // —— 把控制卡片注入到通用设置内容区 ——
@@ -233,28 +328,61 @@
     el.style.webkitBackdropFilter = 'blur(10px)';
   }
 
-  function ensure() {
-    // 插件端权威值：每次注入带一次，只应用一次（applied 标记由注入前缀复位）。
-    // 只应用一次很关键 —— 否则 2s 轮询会把用户刚在页面里清空/改掉的值又覆盖回去。
-    if (window.__dshRestore && !window.__dshRestoreApplied) {
-      window.__dshRestoreApplied = true;
-      set(KEY_BG, window.__dshRestore.bg || '');
-      if (window.__dshRestore.opacity != null) set(KEY_OP, String(window.__dshRestore.opacity));
-    }
-    applyOverlay();
-
-    var dialog = findSettingsDialog();
-    if (dialog && isGeneralPage(dialog)) {
-      var start = findMarker(dialog, ['外观', '繁忙时 Enter 键行为']);
-      var anchor = start ? findListContainer(start) : dialog;
-      if (anchor) {
-        var existing = anchor.querySelector('[data-dshstudio="bg"]');
-        if (!existing) buildCard(anchor);
-        else { updateCardTheme(existing); syncCard(); }
-      }
-    }
-    styleTopBar();
+  // 轻量诊断：状态变化时回传一条，插件端显示在工具窗口日志里，便于定位「卡片没出现」。
+  var lastDiag = '';
+  function diag(state) {
+    if (state === lastDiag) return;
+    lastDiag = state;
+    if ((window.__dshDiagCount || 0) >= 12) return;   // 每次页面加载最多 12 条，避免刷屏
+    window.__dshDiagCount = (window.__dshDiagCount || 0) + 1;
+    try { console.log(SYNC_PREFIX + JSON.stringify({ diag: state })); } catch (e) { /* 忽略 */ }
   }
+
+  /** 把卡片放进 anchor；已存在则搬过去，避免 React 换容器后出现重复卡片。 */
+  function placeCard(anchor) {
+    var card = document.querySelector('[data-dshstudio="bg"]');
+    if (!card) { buildCard(anchor); return; }
+    if (card.parentNode !== anchor) anchor.appendChild(card);
+    updateCardTheme(card);
+    syncCard();
+  }
+
+  function ensure() {
+    try {
+      // 插件端权威值：每次注入带一次，只应用一次（applied 标记由注入前缀复位）。
+      // 只应用一次很关键 —— 否则 2s 轮询会把用户刚在页面里清空/改掉的值又覆盖回去。
+      if (window.__dshRestore && !window.__dshRestoreApplied) {
+        window.__dshRestoreApplied = true;
+        set(KEY_BG, window.__dshRestore.bg || '');
+        if (window.__dshRestore.opacity != null) set(KEY_OP, String(window.__dshRestore.opacity));
+      }
+      applyOverlay();
+
+      var dialog = findSettingsDialog();
+      if (dialog && isGeneralPage(dialog)) {
+        var content = findContentContainer(dialog);
+        var start = findMarker(content, ANCHOR_MARKERS);
+        var anchor = start ? findListContainer(start) : content;
+        if (anchor) {
+          placeCard(anchor);
+          diag('card-injected');
+        } else {
+          diag('no-anchor');
+        }
+      } else {
+        diag(dialog ? 'settings-page-mismatch' : 'no-settings-dialog');
+      }
+      styleTopBar();
+    } catch (e) {
+      // 单次失败不能中断轮询：异常若冒泡出去，setInterval 就注册不上，浮层再也不会出现
+      diag('error:' + (e && e.message ? e.message : e));
+    }
+  }
+
+  // 先注册轮询、再跑首轮 ensure()：万一首轮抛异常，轮询仍然在（否则卡片会永远不出现）。
+  // 避免重复注入时定时器叠加：用单一句柄。
+  if (window.__dshInterval) clearInterval(window.__dshInterval);
+  window.__dshInterval = setInterval(ensure, 2000);
 
   if (document.readyState !== 'loading') { ensure(); }
   else { document.addEventListener('DOMContentLoaded', ensure, { once: true }); }
@@ -262,8 +390,18 @@
   setTimeout(ensure, 300);
   setTimeout(ensure, 1000);
   setTimeout(ensure, 2500);
-  // 避免重复注入时定时器叠加：用单一句柄
-  if (window.__dshInterval) clearInterval(window.__dshInterval);
-  window.__dshInterval = setInterval(ensure, 2000);
+
+  // 设置弹窗是点开后才挂到 DOM 的，只靠 2s 轮询最坏要等 2 秒才出现卡片。
+  // 用 MutationObserver 在内容渲染出来的那一刻就注入；轮询保留作兜底。
+  if (window.__dshObserver) { try { window.__dshObserver.disconnect(); } catch (e) { /* 忽略 */ } }
+  try {
+    var moTimer = null;
+    var mo = new MutationObserver(function () {
+      if (moTimer) return;
+      moTimer = setTimeout(function () { moTimer = null; ensure(); }, 400);
+    });
+    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    window.__dshObserver = mo;
+  } catch (e) { /* 忽略：没有 MutationObserver 就退回轮询 */ }
 
 })();
