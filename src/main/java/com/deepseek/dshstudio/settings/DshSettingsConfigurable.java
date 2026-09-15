@@ -2,6 +2,11 @@ package com.deepseek.dshstudio.settings;
 
 import com.deepseek.dshstudio.DshStudioConstants;
 import com.deepseek.dshstudio.runtime.DshNodeChecker;
+import com.deepseek.dshstudio.runtime.DshRuntimeUpdater;
+import com.intellij.openapi.progress.ProcessCanceledException;
+import com.intellij.openapi.progress.ProgressIndicator;
+import com.intellij.openapi.progress.ProgressManager;
+import com.intellij.openapi.progress.Task;
 import com.deepseek.dshstudio.runtime.DshRuntimeLocation;
 import com.deepseek.dshstudio.runtime.DshRuntimeManager;
 import com.deepseek.dshstudio.runtime.DshRuntimeMode;
@@ -37,6 +42,8 @@ import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.ArrayList;
 
 /**
  * 设置页：Settings → Tools → DeepSeek Harness。
@@ -62,7 +69,10 @@ public final class DshSettingsConfigurable implements Configurable {
     private final JBLabel runtimeBundledLabel = new JBLabel();
     private final JBLabel runtimePathLabel = new JBLabel();
     private final JBLabel runtimeNodeLabel = new JBLabel();
+    private final JBLabel runtimeHotLabel = new JBLabel();
     private final JButton recheckNodeButton = new JButton("重新检测");
+    private final JButton checkRuntimeUpdateButton = new JButton("检查更新");
+    private final JButton removeHotRuntimeButton = new JButton("删除热更新");
     private final JButton unpackButton = new JButton("立即解包");
     private final JButton clearRuntimeButton = new JButton("清理运行时");
 
@@ -228,6 +238,22 @@ public final class DshSettingsConfigurable implements Configurable {
             nodeRow.add(runtimeNodeLabel, BorderLayout.CENTER);
             nodeRow.add(recheckNodeButton, BorderLayout.EAST);
             runtime.add(nodeRow, c);
+
+            c.gridy = r++;
+            c.gridx = 0;
+            c.weightx = 0;
+            runtime.add(new JBLabel("热更新版本:"), c);
+            c.gridx = 1;
+            c.weightx = 1;
+            checkRuntimeUpdateButton.addActionListener(e -> checkRuntimeUpdate());
+            removeHotRuntimeButton.addActionListener(e -> removeHotRuntime());
+            JPanel hotRow = new JPanel(new BorderLayout(8, 0));
+            hotRow.add(runtimeHotLabel, BorderLayout.CENTER);
+            JPanel hotButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+            hotButtons.add(checkRuntimeUpdateButton);
+            hotButtons.add(removeHotRuntimeButton);
+            hotRow.add(hotButtons, BorderLayout.EAST);
+            runtime.add(hotRow, c);
 
             c.gridy = r++;
             c.gridx = 0;
@@ -439,6 +465,111 @@ public final class DshSettingsConfigurable implements Configurable {
         clearRuntimeButton.setEnabled(Files.isDirectory(root));
 
         refreshNodeInfo(false);
+        refreshHotInfo();
+    }
+
+    /** 刷新「热更新版本」行：列出已安装的热更新版本，并决定按钮是否可用。 */
+    private void refreshHotInfo() {
+        List<String> versions = DshRuntimeUpdater.getInstance().installedVersions();
+        if (versions.isEmpty()) {
+            runtimeHotLabel.setText("无（当前用的是内置运行时或系统 dsh）");
+            runtimeHotLabel.setForeground(JBColor.GRAY);
+        } else {
+            runtimeHotLabel.setText(String.join("、", versions)
+                    + "（共 " + versions.size() + " 份，自动模式优先使用）");
+            runtimeHotLabel.setForeground(JBColor.foreground());
+        }
+        removeHotRuntimeButton.setEnabled(!versions.isEmpty());
+        runtimeHotLabel.setToolTipText("热更新版本解包在运行时目录里，自动模式下优先于内置基线使用。"
+                + "想回滚到内置基线，把「运行时来源」改成「仅内置运行时」即可，不必删除。");
+    }
+
+    /** 手动检查运行时更新（后台查询，发现新版本再问用户要不要下载）。 */
+    private void checkRuntimeUpdate() {
+        checkRuntimeUpdateButton.setEnabled(false);
+        checkRuntimeUpdateButton.setText("检查中…");
+        ProgressManager.getInstance().run(
+                new Task.Backgroundable(null, "检查 dsh 运行时更新", true) {
+                    @Override
+                    public void run(@NotNull ProgressIndicator indicator) {
+                        indicator.setIndeterminate(true);
+                        DshRuntimeUpdater.UpdateInfo info =
+                                DshRuntimeUpdater.getInstance().checkForUpdate();
+                        ApplicationManager.getApplication().invokeLater(() -> {
+                            checkRuntimeUpdateButton.setEnabled(true);
+                            checkRuntimeUpdateButton.setText("检查更新");
+                            if (info == null) {
+                                Messages.showInfoMessage(
+                                        "当前没有可用的新版本（也可能是网络不通，"
+                                                + "或发布渠道上还没有本平台的包）。",
+                                        "检查 dsh 运行时更新");
+                                return;
+                            }
+                            String message = "发现新版本 dsh " + info.dshVersion + "。\n\n"
+                                    + "当前版本：" + (info.currentVersion == null ? "未知" : info.currentVersion) + "\n"
+                                    + "下载体积：" + info.humanSize()
+                                    + "（只含 " + DshUtil.hostTarget() + " 平台）\n\n"
+                                    + "下载后会解包到运行时目录，下次启动服务器时生效。";
+                            if (Messages.showYesNoDialog(message,
+                                    "发现新版本 dsh " + info.dshVersion,
+                                    Messages.getQuestionIcon()) == Messages.YES) {
+                                downloadRuntimeUpdate(info);
+                            }
+                        });
+                    }
+                });
+    }
+
+    /** 带进度地下载并解包一个运行时版本。 */
+    private void downloadRuntimeUpdate(DshRuntimeUpdater.UpdateInfo info) {
+        ProgressManager.getInstance().run(
+                new Task.Backgroundable(null, "下载 dsh 运行时 " + info.dshVersion, true) {
+                    @Override
+                    public void run(@NotNull ProgressIndicator indicator) {
+                        indicator.setIndeterminate(false);
+                        try {
+                            DshRuntimeUpdater.getInstance().downloadAndInstall(info, indicator);
+                            ApplicationManager.getApplication().invokeLater(() -> {
+                                refreshRuntimeInfo();
+                                Messages.showInfoMessage(
+                                        "dsh " + info.dshVersion + " 已就绪，下次启动服务器时生效。\n\n"
+                                                + "想回滚到内置基线：把「运行时来源」改成「仅内置运行时」。",
+                                        "dsh 运行时已更新");
+                            });
+                        } catch (ProcessCanceledException canceled) {
+                            // 用户取消，静默收场（临时文件已由 downloadAndInstall 清掉）
+                        } catch (Exception e) {
+                            notifyError("下载 dsh 运行时失败", String.valueOf(e.getMessage()));
+                        }
+                    }
+                });
+    }
+
+    /** 删除所有热更新版本（回滚到内置基线）。 */
+    private void removeHotRuntime() {
+        DshRuntimeUpdater updater = DshRuntimeUpdater.getInstance();
+        List<String> versions = updater.installedVersions();
+        if (versions.isEmpty()) {
+            return;
+        }
+        if (Messages.showYesNoDialog(
+                "确定要删除以下热更新版本吗？\n\n" + String.join("\n", versions) + "\n\n"
+                        + "删除后会退回使用插件内置的运行时（或系统 dsh）。",
+                "删除热更新版本", Messages.getQuestionIcon()) != Messages.YES) {
+            return;
+        }
+        List<String> failed = new ArrayList<>();
+        for (String version : versions) {
+            try {
+                updater.removeVersion(version);
+            } catch (Exception e) {
+                failed.add(version + "（" + e.getMessage() + "）");
+            }
+        }
+        refreshRuntimeInfo();
+        if (!failed.isEmpty()) {
+            notifyError("部分热更新版本删除失败", String.join("\n", failed));
+        }
     }
 
     /**

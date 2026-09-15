@@ -268,12 +268,39 @@ sharp 0.35 自带 **WASM 兜底**（`dist/sharp.cjs`：原生全部失败后 `re
 <运行时根>/
   ├─ baseline-<stamp>/      内置基线（由插件包解出）
   ├─ baseline-<stamp>.tmp/  解包中的临时目录，中断后下次自动清理
-  └─ <dshVersion>/          运行时热更新下载的版本（优先级更高，阶段 6）
+  ├─ <dshVersion>/          运行时热更新下载的版本（优先级更高）
+  └─ .incoming-<version>*/  热更新的下载/解包中间产物，成功或失败都会被清掉
 ```
 
-`stamp` 是构建产物 zip 的 sha256 前 8 位，写进 `dsh-runtime/runtime-meta.json`
+`stamp` 是构建产物 zip 的 sha256 前 8 位，写进 `dsh-runtime/runtime-meta.txt`
 （与 zip 并列打进 JAR）。dsh 版本、目标平台、sharp 模式、裁剪规则任一变化都会换一个新
 stamp，于是「插件升级后要不要重新解包」是自动判断的，不需要额外状态文件。
+
+热更新版本用**版本号**命名（`0.1.5-rc.1`），与 `baseline-*` 区分。中间产物统一以 `.` 开头，
+`hotUpdateDir()` 会跳过它们，所以「下载到一半」不会被误当成一个可用版本。
+
+### 5.1.1 热更新从哪拿包（为什么不用 npm）
+
+dsh 的 72 个直接依赖里 69 个是一方包，但**全部**用 `^x.y.z` 范围声明（还带 prerelease），
+没有一个是精确版本。要在 Java 里正确实现 semver 范围匹配 + 递归依赖解析 + 平台过滤，
+等于重写半个 npm，而且会和构建链路形成两套实现、两份 bug。
+
+所以热更新**复用同一条 Gradle 链路**的产物：`.github/workflows/runtime-release.yml`
+每天检查 npm 上有没有新 dsh，有就用 `bundleDshRuntime` 构建（与内置基线完全相同的
+裁剪与自检流程），按平台拆包后挂到 GitHub Release 上。
+
+| 项 | 约定 |
+| -- | -- |
+| 标签 | `runtime-<dshVersion>`，例如 `runtime-0.1.5-rc.1` |
+| 资产 | `dsh-runtime-<target>.zip` + `runtime-meta-<target>.txt` |
+| 发现 | `GET /repos/skansgai/dsh-studio/releases?per_page=30`，按标签前缀过滤后取最大版本 |
+
+**按平台拆包的理由（实测）**：整包压缩后 79.0 MB，而各平台专有包（sharp/libvips、
+ripgrep、koffi、node-addon）合计 52.4 MB。只保留自己平台后每个包约 **37 MB，省 53%**。
+拆包不物化新树（那是上万文件，本机带安全过滤驱动时得几十分钟），而是在写 zip 时按
+lockfile 的 `os`/`cpu` 约束过滤路径；每个拆出来的包都会单独跑一遍原生包完整性校验
+（`verifySplitZip`）——这类缺失在 JS 层完全看不出来，只有用户在那台机器上真正用终端 /
+贴图片时才炸，所以宁可构建失败。
 
 ### 5.2 运行时根放哪里（最反直觉的一个决定）
 
@@ -430,8 +457,8 @@ zip slip 防护生效）。`DshRuntimeManagerTest.extractZipProducesUsableTree`
 | 3 | 体积优化（npm 残骸、musl、WASM 取舍、node-pty） | ✅ 已完成（108.4 → 46.5 MB） |
 | 4 | Java 侧：首次解包 + 进度 + 路径解析优先级 + chmod + 运行时位置策略 | ✅ 已完成 |
 | 5 | Node 探测 + 引导下载 | ✅ 已完成（最低 22.19.0；只警告不拦截，见 3.3） |
-| 6 | 运行时热更新（后台检查 + 静默下载 + 回退） | ⬜ 待做 |
-| 7 | 设置页「运行时」区块（版本、来源、位置、手动检查/回滚） | 🟡 基本完成（版本/来源/位置/解包/清理已有；检查更新与回滚待阶段 6） |
+| 6 | 运行时热更新（检查 + 下载 + 解包 + 回滚） | ✅ 已完成（发布渠道见 5.1.1） |
+| 7 | 设置页「运行时」区块（版本、来源、位置、手动检查/回滚） | ✅ 已完成 |
 
 ---
 

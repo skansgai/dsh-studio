@@ -77,16 +77,16 @@ public final class DshRuntimeManager {
     private static final String META_RESOURCE = "/dsh-runtime/runtime-meta.txt";
 
     /** 解包完成标记，内容为 stamp；存在即代表这棵树是完整的。 */
-    private static final String UNPACK_MARKER = ".unpacked-ok";
+    static final String UNPACK_MARKER = ".unpacked-ok";
 
     /** 需要可执行位的文件清单（zip 不保留 Unix 权限位）。 */
-    private static final String EXEC_MANIFEST = ".dsh-runtime-executables";
+    static final String EXEC_MANIFEST = ".dsh-runtime-executables";
 
     /** dsh 入口脚本（相对运行时根目录）。 */
-    private static final String DSH_ENTRY = "node_modules/@deepseek-ai/dsh/lib/bin.js";
+    static final String DSH_ENTRY = "node_modules/@deepseek-ai/dsh/lib/bin.js";
 
     /** dsh 的 package.json（相对运行时根目录），用于读取版本号。 */
-    private static final String DSH_PACKAGE = "node_modules/@deepseek-ai/dsh/package.json";
+    static final String DSH_PACKAGE = "node_modules/@deepseek-ai/dsh/package.json";
 
     /** 内置基线目录的前缀；热更新目录用版本号命名，据此区分。 */
     private static final String BASELINE_PREFIX = "baseline-";
@@ -602,7 +602,7 @@ public final class DshRuntimeManager {
      * 只查一个文件（入口），成本可以忽略；查不出「部分文件被加密」的极端情况，
      * 但那种情况下 node 本来也会立刻报错。
      */
-    private static void verifyExtractedTree(@NotNull Path root) throws IOException {
+    static void verifyExtractedTree(@NotNull Path root) throws IOException {
         Path entry = root.resolve(DSH_ENTRY);
         if (!Files.isRegularFile(entry)) {
             throw new IOException("内置 dsh 运行时解包不完整：缺少入口脚本 " + DSH_ENTRY
@@ -702,7 +702,7 @@ public final class DshRuntimeManager {
      * {@code @vscode/ripgrep} 的 {@code rg} 解出来会变成 0644，终端与搜索会直接不可用。
      * Windows 不看权限位，跳过。
      */
-    private static void applyExecutableBits(@NotNull Path root) {
+    static void applyExecutableBits(@NotNull Path root) {
         if (DshUtil.isWindows()) {
             return;
         }
@@ -735,7 +735,7 @@ public final class DshRuntimeManager {
         }
     }
 
-    private static void moveInto(@NotNull Path from, @NotNull Path to) throws IOException {
+    static void moveInto(@NotNull Path from, @NotNull Path to) throws IOException {
         try {
             Files.move(from, to, StandardCopyOption.ATOMIC_MOVE);
         } catch (AtomicMoveNotSupportedException e) {
@@ -779,7 +779,7 @@ public final class DshRuntimeManager {
      * 用 {@code Files.walk} 而不是 {@code File.walkTopDown()}：后者会跟进符号链接，
      * 遇到 node_modules 里的环形链接会原地空转（构建期踩过这个坑）。
      */
-    private static void deleteRecursively(@NotNull Path root) throws IOException {
+    static void deleteRecursively(@NotNull Path root) throws IOException {
         if (!Files.exists(root)) {
             return;
         }
@@ -791,7 +791,7 @@ public final class DshRuntimeManager {
         }
     }
 
-    private static void deleteRecursivelyQuietly(@NotNull Path root) {
+    static void deleteRecursivelyQuietly(@NotNull Path root) {
         try {
             deleteRecursively(root);
         } catch (IOException e) {

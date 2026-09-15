@@ -1,0 +1,111 @@
+name: 发布 dsh 运行时（热更新渠道）
+
+# 这是插件「运行时热更新」的发布渠道。
+#
+# 动机：插件包里内置的 dsh 运行时是发布时那一刻的版本，dsh 迭代很快，用户想用新版
+# 就得等插件发版。所以把运行时版本与插件版本解耦 —— 定时检查 npm 上有没有新的 dsh，
+# 有就用**同一套** Gradle 任务（bundleDshRuntime）构建运行时包并挂到 Release 上，
+# 插件侧据此热更新。
+#
+# 为什么不把「从 npm 解析依赖」搬到插件里做：dsh 的 72 个直接依赖里 69 个是一方包，
+# 但全部用 `^x.y.z` 范围声明（还带 prerelease），要在 Java 里正确解析 semver 范围 +
+# 递归依赖 + 平台过滤，等于重写半个 npm。而这条 Gradle 链路已经跑通并有两级自检，
+# 复用它比重新实现一套可靠得多。
+#
+# 标签约定：runtime-<dshVersion>，例如 runtime-0.1.5-rc.1
+# 资产（按平台拆分，插件只下自己那一份；整包 79 MB，拆开每平台约 37 MB）：
+#   dsh-runtime-<target>.zip      target ∈ win32-x64 / darwin-x64 / darwin-arm64 / linux-x64 / linux-arm64
+#   runtime-meta-<target>.txt     对应的元数据（dshVersion / stamp / entries / unpackedBytes）
+
+on:
+  schedule:
+    # 每天 UTC 20:00（北京时间次日 04:00）
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '要构建的 dsh 版本（留空 = npm 上的 latest）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    name: 查 npm 上有没有新版本
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+      skip: ${{ steps.pick.outputs.skip }}
+    steps:
+      - name: 选定版本并判断是否已发布
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WANT: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          want="${WANT:-}"
+          if [ -z "$want" ]; then
+            want=$(curl -fsSL --retry 3 --retry-delay 5 \
+              https://registry.npmjs.org/@deepseek-ai/dsh/latest | jq -r .version)
+          fi
+          if [ -z "$want" ] || [ "$want" = "null" ]; then
+            echo "::error::没能确定 dsh 版本"
+            exit 1
+          fi
+          echo "选定 dsh 版本：$want"
+          if gh release view "runtime-$want" >/dev/null 2>&1; then
+            echo "runtime-$want 已存在，本次跳过构建"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$want" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: 构建并发布运行时
+    needs: check
+    if: needs.check.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # 构建脚本要求「构建机自己的平台必须在目标列表里」——只有它的二进制能在构建机上
+      # 真正跑起来，后面的自检才有意义。ubuntu-latest 是 linux-x64，在目标列表内。
+      - name: 装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 装 JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: 构建运行时（全 5 平台 + 按平台拆包）
+        run: |
+          ./gradlew bundleDshRuntime \
+            -Pdsh.runtime.version='${{ needs.check.outputs.version }}' \
+            --console=plain --stacktrace
+
+      - name: 列出产物
+        run: ls -lh build/dsh-runtime/ build/dsh-runtime/split/
+
+      - name: 发布 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VER: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "runtime-$VER" \
+            --title "dsh 运行时 $VER" \
+            --notes "内置 dsh 运行时 **$VER**（按平台拆分，供插件热更新使用）。
+
+          由 \`bundleDshRuntime\` 构建，与插件内置基线走完全相同的裁剪与自检流程。
+
+          各平台下载自己那一份：\`dsh-runtime-<target>.zip\` + \`runtime-meta-<target>.txt\`。" \
+            build/dsh-runtime/split/*.zip build/dsh-runtime/split/*.txt

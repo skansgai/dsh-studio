@@ -57,6 +57,7 @@
     <extensions defaultExtensionNs="com.intellij">
         <applicationService serviceImplementation="com.deepseek.dshstudio.settings.DshSettingsState"/>
         <applicationService serviceImplementation="com.deepseek.dshstudio.runtime.DshRuntimeManager"/>
+        <applicationService serviceImplementation="com.deepseek.dshstudio.runtime.DshRuntimeUpdater"/>
         <projectService serviceImplementation="com.deepseek.dshstudio.server.DshServerManager"/>
         <projectService serviceImplementation="com.deepseek.dshstudio.server.DshApiClient"/>
         <applicationConfigurable parentId="tools"

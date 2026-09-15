@@ -13,6 +13,7 @@ import java.util.Base64
 import java.util.Properties
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 import javax.inject.Inject
 import org.gradle.process.ExecOperations
@@ -345,6 +346,16 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
     @get:OutputFile
     abstract val outputMeta: RegularFileProperty
 
+    /**
+     * 按平台拆分的运行时包目录（`dsh-runtime-<target>.zip` + 各自的 meta）。
+     *
+     * 热更新用它们：整包 79 MB，而用户只需要自己那一个平台的 37 MB（实测省 53%，
+     * 差额几乎全是别的平台的 sharp/libvips 与 ripgrep 二进制）。插件包内仍然用合并包，
+     * 这样一个插件包就能服务所有平台。
+     */
+    @get:OutputDirectory
+    abstract val outputSplitDir: DirectoryProperty
+
     @get:Inject
     abstract val execOps: ExecOperations
 
@@ -434,6 +445,16 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
 
         /** 记录哪些文件需要可执行位；解包后由插件统一 chmod。 */
         private const val EXEC_MANIFEST = ".dsh-runtime-executables"
+
+        /**
+         * 本机 DLP 加密文件的文件头魔数。命中就说明这个文件在别人的机器上读出来是乱码。
+         *
+         * **必须放在 companion object 里，不能提到脚本顶层。** Kotlin 脚本里，顶层类一旦引用
+         * 脚本级声明，编译器就会把它生成为**非静态内部类**，Gradle 随后会报
+         * `Class Build_gradle.BundleDshRuntimeTask is a non-static inner class` 并且无法实例化任务。
+         * 常量放在 companion 里没有这个问题（`writeZip` 会用到它）。
+         */
+        const val DLP_MAGIC = "E-SafeNet"
 
         /**
          * 构建机自身的平台标识，形如 `win32-x64`。
@@ -556,35 +577,117 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
         logger.lifecycle("[dsh-runtime] 记录 $executables 个需要可执行位的文件")
 
         // ── 5. 打包 ──────────────────────────────────────────────────────
+        // 合并包（含全部目标平台）—— 打进插件 JAR，一个插件包服务所有平台。
         val zip = outputZip.get().asFile
-        zip.parentFile.mkdirs()
-        zip.delete()
-        val mergedPath = merged.toPath()
-        var entryCount = 0
-        var unpackedBytes = 0L
-        ZipOutputStream(zip.outputStream().buffered()).use { zos ->
-            Files.walk(mergedPath).use { stream ->
-                stream.filter { Files.isRegularFile(it) }
-                    // 安装标记是构建期用的，不进产物
-                    .filter { it.fileName?.toString() != MARKER_FILE }
-                    .sorted()
-                    .forEach { p ->
-                        val entryName = mergedPath.relativize(p).joinToString("/") { it.toString() }
-                        zos.putNextEntry(ZipEntry(entryName))
-                        Files.newInputStream(p).use { it.copyTo(zos) }
-                        zos.closeEntry()
-                        entryCount++
-                        unpackedBytes += Files.size(p)
-                    }
+        val (entryCount, unpackedBytes) = writeZip(merged, zip)
+
+        // ── 5.5 按平台拆包 ───────────────────────────────────────────────
+        // 热更新用：用户只需要自己那一个平台的运行时。实测整包压缩后 79 MB，
+        // 拆开每个约 37 MB（省 53%），差额几乎全是别的平台的 sharp/libvips 与 ripgrep 二进制。
+        // 不物化拆分后的树（那是上万文件，本机带安全过滤驱动时得几十分钟），
+        // 而是在写 zip 时按路径过滤掉别的平台的原生包。
+        val splitDir = outputSplitDir.get().asFile
+        splitDir.mkdirs()
+        platformTargets.forEach { target ->
+            val excludes = platformExclusions(lockFile, target, platformTargets)
+            val targetZip = File(splitDir, "dsh-runtime-$target.zip")
+            val (n, bytes) = writeZip(merged, targetZip) { rel ->
+                excludes.none { rel == it || rel.startsWith("$it/") }
             }
+            // 拆包靠的是「按 lockfile 的 os/cpu 约束剔路径」，规则写错就会悄悄少带东西 ——
+            // 这类缺失在 JS 层完全看不出来，只有用户在那台机器上真正用终端/贴图片时才炸，
+            // 所以每个拆出来的包都单独校验一遍原生包是否齐全。
+            verifySplitZip(targetZip, target)
+            writeMeta(File(splitDir, "runtime-meta-$target.txt"), targetZip, listOf(target), n, bytes)
+            logger.lifecycle(
+                "[dsh-runtime] 拆包 $target：%.1f MB（%d 个文件，解包后 %.1f MB）".format(
+                    targetZip.length() / 1024.0 / 1024.0, n, bytes / 1024.0 / 1024.0
+                )
+            )
         }
 
         // ── 6. 元数据 ────────────────────────────────────────────────────
         // 插件侧解包前先读它：stamp 与本地已解包目录一致就跳过，避免每次启动都碰 80 MB 的 zip。
         // stamp 取 zip 内容的 sha256 前缀 —— 版本、目标平台、sharp 模式、裁剪规则任一变化都会
         // 产生新 stamp，从而解包到新目录，旧目录可安全清理。
+        val metaFile = outputMeta.get().asFile
+        val stamp = writeMeta(metaFile, zip, platformTargets, entryCount, unpackedBytes)
+
+        logger.lifecycle(
+            // 注意括号：`.format()` 只作用于紧邻的字符串字面量，用 `+` 拼出来的串必须整体括起来，
+            // 否则前面那段里的 %.1f 不会被替换（会原样打进日志，看着像构建坏了）。
+            (
+                "[dsh-runtime] 完成：${zip.absolutePath}（%.1f MB，$entryCount 个文件，" +
+                    "解包后 %.1f MB，stamp $stamp）"
+                ).format(zip.length() / 1024.0 / 1024.0, unpackedBytes / 1024.0 / 1024.0)
+        )
+    }
+
+    /**
+     * 把 [root] 打成一个 zip。
+     *
+     * @param include 按相对路径（正斜杠）判断是否收录；按平台拆包时用来剔除别的平台的原生包
+     * @return 条目数与解包后总字节数
+     */
+    private fun writeZip(
+        root: File,
+        zip: File,
+        include: (String) -> Boolean = { true }
+    ): Pair<Int, Long> {
+        zip.parentFile.mkdirs()
+        zip.delete()
+        val rootPath = root.toPath()
+        var entryCount = 0
+        var unpackedBytes = 0L
+        // 边打包边校验明文：本机 DLP 会按路径/内容把文件异步加密成密文，而 java 进程
+        // 读到的就是密文字节，会原样进 zip。用户那边没有 DLP，看到的就是乱码 ——
+        // 与其发一个自己都跑不起来的包，不如构建就失败。
+        val encrypted = mutableListOf<String>()
+        ZipOutputStream(zip.outputStream().buffered()).use { zos ->
+            Files.walk(rootPath).use { stream ->
+                stream.filter { Files.isRegularFile(it) }
+                    // 安装标记是构建期用的，不进产物
+                    .filter { it.fileName?.toString() != MARKER_FILE }
+                    .map { it to rootPath.relativize(it).joinToString("/") { n -> n.toString() } }
+                    .filter { (_, name) -> include(name) }
+                    .sorted(compareBy { it.second })
+                    .forEach { (path, name) ->
+                        zos.putNextEntry(ZipEntry(name))
+                        Files.newInputStream(path).use { input ->
+                            val head = input.readNBytes(64)
+                            if (String(head, Charsets.ISO_8859_1).contains(DLP_MAGIC)) {
+                                encrypted += name
+                            }
+                            zos.write(head)
+                            input.copyTo(zos)
+                        }
+                        zos.closeEntry()
+                        entryCount++
+                        unpackedBytes += Files.size(path)
+                    }
+            }
+        }
+        if (encrypted.isNotEmpty()) {
+            // 先把坏产物删掉，免得被后续步骤当成正常产物用
+            zip.delete()
+            throw GradleException(
+                buildString {
+                    append("打包时发现 ${encrypted.size} 个文件已被本机透明加密软件加密（文件头 $DLP_MAGIC）。\n")
+                    append("这些文件原样打进 zip 后，用户机器上 node 读出来是乱码，会直接跑不起来：\n")
+                    encrypted.take(10).forEach { append("  - ").append(it).append('\n') }
+                    if (encrypted.size > 10) append("  ...（其余 ${encrypted.size - 10} 个略）\n")
+                    append("构建工作目录应位于系统临时目录（见 dshRuntimeScratchDir()），")
+                    append("若仍出现请把该目录加入 DLP 排除名单后重试。")
+                }
+            )
+        }
+        return entryCount to unpackedBytes
+    }
+
+    /** zip 内容的 sha256 前 8 位。版本/平台/sharp/裁剪规则任一变化都会产生新 stamp。 */
+    private fun sha256Prefix(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
-        zip.inputStream().use { input ->
+        file.inputStream().use { input ->
             val buf = ByteArray(1 shl 16)
             while (true) {
                 val n = input.read(buf)
@@ -592,28 +695,87 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
                 digest.update(buf, 0, n)
             }
         }
-        val stamp = digest.digest().joinToString("") { "%02x".format(it) }.take(8)
+        return digest.digest().joinToString("") { "%02x".format(it) }.take(8)
+    }
+
+    /** 写运行时元数据；插件侧靠它判断「内置/已下载的是哪个 dsh、要不要重新解包」。返回 stamp。 */
+    private fun writeMeta(
+        metaFile: File,
+        zip: File,
+        targets: List<String>,
+        entryCount: Int,
+        unpackedBytes: Long
+    ): String {
+        val stamp = sha256Prefix(zip)
         val meta = buildString {
             append("{\n")
-            append("  \"dshVersion\": \"$version\",\n")
+            append("  \"dshVersion\": \"${dshVersion.get()}\",\n")
             append("  \"stamp\": \"$stamp\",\n")
             append("  \"sharp\": \"${sharpMode.get()}\",\n")
-            append("  \"targets\": [${platformTargets.joinToString(", ") { "\"$it\"" }}],\n")
+            append("  \"targets\": [${targets.joinToString(", ") { "\"$it\"" }}],\n")
             append("  \"entries\": $entryCount,\n")
             append("  \"unpackedBytes\": $unpackedBytes,\n")
             append("  \"builtAt\": \"${Instant.now()}\"\n")
             append("}\n")
         }
-        val metaFile = outputMeta.get().asFile
         metaFile.parentFile.mkdirs()
         metaFile.writeText(meta)
+        return stamp
+    }
 
-        logger.lifecycle(
-            "[dsh-runtime] 完成：${zip.absolutePath}（%.1f MB，$entryCount 个文件，" +
-                "解包后 %.1f MB，stamp $stamp）".format(
-                    zip.length() / 1024.0 / 1024.0, unpackedBytes / 1024.0 / 1024.0
-                )
-        )
+    /**
+     * 校验按平台拆出来的包：必须仍含该平台的全部原生包。
+     *
+     * 这是拆包唯一的风险点 —— 过滤规则一旦写错就会少带原生包，而 JS 层完全看不出来，
+     * 只有用户在那台机器上真正打开终端 / 贴图片时才炸。所以宁可构建失败。
+     */
+    private fun verifySplitZip(zip: File, target: String) {
+        val names = mutableListOf<String>()
+        ZipFile(zip).use { zf ->
+            val e = zf.entries()
+            while (e.hasMoreElements()) names += e.nextElement().name
+        }
+        val (osName, cpuName) = target.split("-", limit = 2)
+        val problems = mutableListOf<String>()
+        requiredNatives(osName).forEach { candidates ->
+            val hit = candidates.any { pkg ->
+                val prefix = "node_modules/${pkg.format(osName, cpuName)}/"
+                names.any { it.startsWith(prefix) }
+            }
+            if (!hit) problems += "缺少 ${candidates.first().format(osName, cpuName)}"
+        }
+        // node-pty 的原生绑定是「一个包带全平台 prebuilds」，按平台子目录单独确认。
+        // 注意 Windows 上是 conpty.node，只有 Unix 才有 pty.node。
+        val ptyModule = if (osName == "win32") "conpty.node" else "pty.node"
+        val pty = "node_modules/node-pty/prebuilds/$target/$ptyModule"
+        if (pty !in names) problems += "缺少 $pty"
+
+        check(problems.isEmpty()) {
+            "按平台拆包校验失败（$target）：\n" + problems.joinToString("\n") +
+                "\n多半是 platformExclusions 的过滤规则与 lockfile 里的 os/cpu 约束不一致。"
+        }
+    }
+
+    /**
+     * 按平台拆包时要剔除的路径前缀。
+     *
+     * 规则：lockfile 里带 os/cpu 约束、且不匹配 [target] 的包整包剔除；
+     * node-pty 的 prebuilds 按平台子目录摆放，也一并只留自己那份。
+     */
+    private fun platformExclusions(
+        lockFile: File,
+        target: String,
+        allTargets: List<String>
+    ): List<String> {
+        val (osName, cpuName) = target.split("-", limit = 2)
+        val excludes = mutableListOf<String>()
+        platformPackages(lockFile).forEach { pkg ->
+            if (matches(pkg.os, osName) && matches(pkg.cpu, cpuName)) return@forEach
+            excludes += pkg.path
+        }
+        allTargets.filter { it != target }
+            .forEach { excludes += "node_modules/node-pty/prebuilds/$it" }
+        return excludes
     }
 
     /**
@@ -726,29 +888,7 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
         root: File,
         targets: List<String>
     ): Int {
-        @Suppress("UNCHECKED_CAST")
-        val lock = JsonSlurper().parse(lockFile) as Map<String, Any?>
-        @Suppress("UNCHECKED_CAST")
-        val packages = lock["packages"] as? Map<String, Any?> ?: emptyMap()
-
-        // 摘出所有带平台约束的条目
-        data class PlatformPackage(
-            val path: String,
-            val resolved: String,
-            val integrity: String?,
-            val os: List<String>,
-            val cpu: List<String>
-        )
-
-        val platformPackages = packages.mapNotNull { (path, raw) ->
-            if (!path.startsWith("node_modules/")) return@mapNotNull null
-            val meta = raw as? Map<*, *> ?: return@mapNotNull null
-            val osList = (meta["os"] as? List<*>)?.map { it.toString() } ?: emptyList()
-            val cpuList = (meta["cpu"] as? List<*>)?.map { it.toString() } ?: emptyList()
-            if (osList.isEmpty() && cpuList.isEmpty()) return@mapNotNull null
-            val resolved = meta["resolved"] as? String ?: return@mapNotNull null
-            PlatformPackage(path, resolved, meta["integrity"] as? String, osList, cpuList)
-        }
+        val platformPackages = platformPackages(lockFile)
 
         var fetched = 0
         targets.forEach { target ->
@@ -769,6 +909,38 @@ abstract class BundleDshRuntimeTask : DefaultTask() {
             logger.lifecycle("[dsh-runtime] $target：补入 $count 个专有包")
         }
         return fetched
+    }
+
+    /** lockfile 里一条带平台约束的包。 */
+    private data class PlatformPackage(
+        val path: String,
+        val resolved: String,
+        val integrity: String?,
+        val os: List<String>,
+        val cpu: List<String>
+    )
+
+    /**
+     * 从 lockfile 里摘出所有带 `os`/`cpu` 约束的包。
+     *
+     * 同一份结果有两处用途：构建时按平台**定点抓取**（[fetchPlatformPackages]），
+     * 以及按平台**拆包**时剔除别的平台（[platformExclusions]）。抽出来共用，避免两处规则漂移。
+     */
+    private fun platformPackages(lockFile: File): List<PlatformPackage> {
+        @Suppress("UNCHECKED_CAST")
+        val lock = JsonSlurper().parse(lockFile) as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val packages = lock["packages"] as? Map<String, Any?> ?: emptyMap()
+
+        return packages.mapNotNull { (path, raw) ->
+            if (!path.startsWith("node_modules/")) return@mapNotNull null
+            val meta = raw as? Map<*, *> ?: return@mapNotNull null
+            val osList = (meta["os"] as? List<*>)?.map { it.toString() } ?: emptyList()
+            val cpuList = (meta["cpu"] as? List<*>)?.map { it.toString() } ?: emptyList()
+            if (osList.isEmpty() && cpuList.isEmpty()) return@mapNotNull null
+            val resolved = meta["resolved"] as? String ?: return@mapNotNull null
+            PlatformPackage(path, resolved, meta["integrity"] as? String, osList, cpuList)
+        }
     }
 
     /** 平台约束匹配：约束为空（不限制）或含 `any` 即视为匹配。 */
@@ -1121,6 +1293,39 @@ val dshRuntimeZip = layout.buildDirectory.file("dsh-runtime/dsh-runtime.zip")
 // 内容仍然是 JSON，只是换一个 DLP 不碰的扩展名；下面的 doFirst 还会再兜底校验一次。
 val dshRuntimeMeta = layout.buildDirectory.file("dsh-runtime/runtime-meta.txt")
 
+/** 读前 64 字节判断文件是否已被透明加密。 */
+fun isDlpEncrypted(file: File): Boolean = file.inputStream().use {
+    String(it.readNBytes(64), Charsets.ISO_8859_1).contains(BundleDshRuntimeTask.DLP_MAGIC)
+}
+
+/**
+ * 构建期的工作目录（几万个 node_modules 小文件）。
+ *
+ * **必须放在系统临时目录，不能放在项目目录里。** 本机企业 DLP 会对范围内的路径做
+ * 「逐文件策略查询」，实测 java 写 1 KB 小文件：
+ *
+ * | 位置 | 速率 | 18390 个文件耗时 |
+ * | -- | -- | -- |
+ * | 系统临时目录 `%TEMP%` | 1209~1611 files/s | 约 12~15 秒 |
+ * | 项目目录 `D:\Develop\...` | 6.0 files/s | 约 51 分钟 |
+ * | `D:\` 根目录（同样在范围内） | 7.7 files/s | 约 40 分钟 |
+ *
+ * 相差 200 倍以上，而且**范围内的路径还会被异步加密**：产物 zip 里因此混进过 36 个密文条目
+ * （全是 `@img/sharp-*`、`@koromix/koffi-*`、`@vscode/ripgrep` 这些原生包的 `package.json`），
+ * 发到用户机器上 node 读出来就是乱码 —— 用户那边没有 DLP，看到的就是原始密文字节。
+ * Java 进程无权解密，唯一可靠的办法就是根本不在范围内落盘。`writeZip` 里有硬校验兜底。
+ *
+ * 可用 `-Pdsh.runtime.work=<目录>` 覆盖（例如临时目录空间不足时）。
+ */
+fun dshRuntimeScratchDir(): File {
+    val override = providers.gradleProperty("dsh.runtime.work").orNull?.takeIf { it.isNotBlank() }
+    if (override != null) return File(override)
+    val base = System.getenv("TEMP")?.takeIf { it.isNotBlank() }
+        ?: System.getenv("TMP")?.takeIf { it.isNotBlank() }
+        ?: System.getProperty("java.io.tmpdir")
+    return File(base, "dshstudio-runtime/work")
+}
+
 /**
  * npm 的启动命令。
  *
@@ -1150,9 +1355,11 @@ val bundleDshRuntime = tasks.register<BundleDshRuntimeTask>("bundleDshRuntime") 
     nodeExecutable.set(providers.gradleProperty("dsh.runtime.node").orElse("node"))
     forceRefresh.set(providers.gradleProperty("dsh.runtime.refresh").map { it == "true" }.orElse(false))
     sharpMode.set(providers.gradleProperty("dsh.runtime.sharp").orElse("native"))
-    workDir.set(layout.buildDirectory.dir("dsh-runtime/work"))
+    // 放在系统临时目录，不放 build/：见 dshRuntimeScratchDir() 的说明（268 倍速差 + 避免被加密）
+    workDir.set(layout.dir(providers.provider { dshRuntimeScratchDir() }))
     outputZip.set(dshRuntimeZip)
     outputMeta.set(dshRuntimeMeta)
+    outputSplitDir.set(layout.buildDirectory.dir("dsh-runtime/split"))
 }
 
 // 把运行时 zip 与元数据作为资源打进 JAR：JAR 里只多两个条目，
@@ -1164,15 +1371,12 @@ tasks.named<ProcessResources>("processResources") {
     // 而不是把一个插件自己都读不懂的包发出去。
     doFirst {
         val meta = dshRuntimeMeta.get().asFile
-        if (meta.isFile) {
-            val head = meta.inputStream().use { it.readNBytes(64) }
-            if (String(head, Charsets.ISO_8859_1).contains("E-SafeNet")) {
-                throw GradleException(
-                    "runtime-meta 被本机的透明加密软件加密了（文件头 E-SafeNet）：" +
-                        meta.absolutePath + "\n" +
-                        "这样打进 JAR 后插件读不到自己的元数据。请把 build/ 加入 DLP 排除名单后重试。"
-                )
-            }
+        if (meta.isFile && isDlpEncrypted(meta)) {
+            throw GradleException(
+                "runtime-meta 被本机的透明加密软件加密了（文件头 ${BundleDshRuntimeTask.DLP_MAGIC}）：" +
+                    meta.absolutePath + "\n" +
+                    "这样打进 JAR 后插件读不到自己的元数据。请把 build/ 加入 DLP 排除名单后重试。"
+            )
         }
     }
 

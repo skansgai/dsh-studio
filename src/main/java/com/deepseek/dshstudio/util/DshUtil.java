@@ -729,7 +729,7 @@ public final class DshUtil {
 
     /** HTTP GET，返回响应体文本；非 2xx 或任何异常返回 null。 */
     @Nullable
-    private static String httpGetText(String url, int timeoutMs) {
+    public static String httpGetText(String url, int timeoutMs) {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
