@@ -24,7 +24,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.4.0"
+version = "0.4.1"
 
 repositories {
     mavenCentral()
@@ -117,6 +117,10 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
+            <h3>0.4.1</h3>
+            <ul>
+              <li><b>修复企业透明加密（DLP）下的启动失败</b>：部分环境会按读进程白名单把解包出的运行时文件加密，导致 node 加载 package.json 时报 ERR_INVALID_PACKAGE_CONFIG。现在改由 node 侧自检运行时是否可读：读不到就自动回退到系统 dsh（AUTO 模式）或在设置页给出操作指引（BUNDLED 模式），并在启动日志与通知栏提示。</li>
+            </ul>
             <h3>0.4.0</h3>
             <ul>
               <li><b>内置 dsh 运行时，开箱即用</b>：插件自带裁剪过的 dsh（含全部 Node 依赖），首次使用时在本地解包即可运行，
