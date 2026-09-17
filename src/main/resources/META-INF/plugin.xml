@@ -9,6 +9,7 @@
 <ul>
   <li>Embedded browser tool window (JCEF) showing the Harness chat and tool calls</li>
   <li>One-click start / stop of the local <code>dsh web</code> server (Node.js / npx based, customizable command)</li>
+  <li><b>One dsh server per project</b>: each IDE project gets its own process, its own port (auto-falls back to a free one when taken) and its own workspace root, so two projects never share sessions or settings</li>
   <li>Automatic server status detection with a colored status bar and live polling</li>
   <li>Server log panel for troubleshooting startup problems</li>
   <li><b>Send code to Harness</b>: right-click in the editor and send the selection (or the whole file) to a session</li>
@@ -16,7 +17,8 @@
   <li><b>Recent sessions</b>: search-style popup listing Harness sessions, jump straight to one</li>
   <li><b>Headless tasks</b>: run a one-shot <code>dsh --profile headless</code> task from the IDE, output lands in the Server Log</li>
   <li>Open the same page in your system browser at any time</li>
-  <li>Configurable URL / port / working directory (workspace root) / <code>DSH_HOME</code></li>
+  <li><b>Per-project</b> server URL / port / working directory (workspace root) / auth token, plus a global <code>DSH_HOME</code></li>
+  <li>The dsh process is stopped automatically when its project closes (optional "keep running" switch)</li>
 </ul>
 
 <h3>Personalize (0.3.0)</h3>
@@ -29,14 +31,14 @@
 <ol>
   <li><b>Install</b>: Settings &rarr; Plugins &rarr; Marketplace, search "DeepSeek Harness", install and restart the IDE.</li>
   <li><b>Open</b>: click the blue hexagon icon on the right tool-window bar, or go to <b>Tools &rarr; DeepSeek Harness</b>.</li>
-  <li><b>Connect</b>: it auto-connects if a <code>dsh web</code> server is already running (default http://127.0.0.1:3080). If not, click <b>&#9654;</b> to start one - this requires Node.js 18+ and installs DeepSeek Harness automatically on first run.</li>
+  <li><b>Connect</b>: click <b>&#9654;</b> to start a <code>dsh web</code> server for this project (default port 3080; if it is taken by another project the plugin picks a free port instead). This requires Node.js 18+ and installs DeepSeek Harness automatically on first run. To attach to a server you started yourself, put its URL into <b>Settings &rarr; Tools &rarr; DeepSeek Harness</b>.</li>
   <li><b>Configure the model</b>: inside the Harness UI open <b>Settings &rarr; Models</b> and add your API key (e.g. a DeepSeek API key).</li>
   <li><b>Go</b>: create a session, pick a model, and start chatting / coding.</li>
 </ol>
 
 <h3>Settings</h3>
 <ul>
-  <li><b>Tools &rarr; DeepSeek Harness</b>: IDE theme, port, working directory, <code>DSH_HOME</code>.</li>
+  <li><b>Tools &rarr; DeepSeek Harness</b>: per-project server URL / port / working directory / token, plus IDE theme and <code>DSH_HOME</code>. Values are stored per project, so every project keeps its own.</li>
   <li><b>Harness web UI &rarr; 通用设置</b>: background image &amp; overlay opacity (0.3.0).</li>
 </ul>
 
@@ -58,12 +60,15 @@
         <applicationService serviceImplementation="com.deepseek.dshstudio.settings.DshSettingsState"/>
         <applicationService serviceImplementation="com.deepseek.dshstudio.runtime.DshRuntimeManager"/>
         <applicationService serviceImplementation="com.deepseek.dshstudio.runtime.DshRuntimeUpdater"/>
+        <projectService serviceImplementation="com.deepseek.dshstudio.settings.DshProjectSettings"/>
         <projectService serviceImplementation="com.deepseek.dshstudio.server.DshServerManager"/>
         <projectService serviceImplementation="com.deepseek.dshstudio.server.DshApiClient"/>
-        <applicationConfigurable parentId="tools"
-                                 instance="com.deepseek.dshstudio.settings.DshSettingsConfigurable"
-                                 id="com.deepseek.dshstudio.settings"
-                                 displayName="DeepSeek Harness"/>
+        <!-- 项目级设置页：服务器地址 / 端口 / 工作目录 / Token 每个项目各配各的，
+             同时开 A、B 两个项目才能各跑各的 dsh、互不覆盖（其余项仍是全局的）。 -->
+        <projectConfigurable parentId="tools"
+                             instance="com.deepseek.dshstudio.settings.DshSettingsConfigurable"
+                             id="com.deepseek.dshstudio.settings"
+                             displayName="DeepSeek Harness"/>
         <toolWindow id="DeepSeek Harness"
                     anchor="right"
                     secondary="false"

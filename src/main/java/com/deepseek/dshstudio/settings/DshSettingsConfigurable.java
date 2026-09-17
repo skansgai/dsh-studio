@@ -7,6 +7,7 @@ import com.intellij.openapi.progress.ProcessCanceledException;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.progress.Task;
+import com.intellij.openapi.project.Project;
 import com.deepseek.dshstudio.runtime.DshRuntimeLocation;
 import com.deepseek.dshstudio.runtime.DshRuntimeManager;
 import com.deepseek.dshstudio.runtime.DshRuntimeMode;
@@ -47,8 +48,18 @@ import java.util.ArrayList;
 
 /**
  * 设置页：Settings → Tools → DeepSeek Harness。
+ * <p>
+ * <b>做成项目级</b>（{@code projectConfigurable}）是有意的：本页里的「服务器地址 / 端口 /
+ * 工作目录 / Token」都是「一个 dsh 实例」的概念，同一个 IDE 里同时开 A、B 两个项目时必须各配各的。
+ * 共享一份全局配置的话，B 一改就会把 A 覆盖掉，B 还会连到 A 的服务器上去。
+ * <p>
+ * 其余区块（运行时 / 主题 / 背景图 / 启动选项）仍然是全局的，存在应用级设置里，
+ * 在哪个项目的设置页改都一样。界面上通过区块标题里的「（全局）」/「（仅本项目）」区分。
  */
 public final class DshSettingsConfigurable implements Configurable {
+
+    /** 所属项目：项目级字段（服务器地址 / 端口 / 工作目录 / token）都从它取。 */
+    private final Project project;
 
     private final JBTextField serverUrlField = new JBTextField();
     private final JSpinner startPortSpinner = new JSpinner(new SpinnerNumberModel(3080, 0, 65535, 1));
@@ -58,8 +69,12 @@ public final class DshSettingsConfigurable implements Configurable {
     private final JBTextField serverTokenField = new JBTextField();
     private final JCheckBox autoStartCheckBox = new JCheckBox("打开工具窗口时自动启动服务器（若尚未运行）");
     private final JCheckBox embeddedCheckBox = new JCheckBox("使用内嵌浏览器（JCEF）显示界面");
+    private final JCheckBox keepProcessCheckBox =
+            new JCheckBox("项目关闭后保留 dsh 服务器进程（默认关闭：随项目结束，顺带释放端口）");
     private final JComboBox<DshUiTheme> themeCombo = new JComboBox<>(DshUiTheme.values());
     private final JBLabel testResultLabel = new JBLabel();
+    /** 只读展示「本项目实际会连的地址」，避免用户以为填了端口就一定用那个端口。 */
+    private final JBLabel effectiveAddressLabel = new JBLabel();
 
     // ── 运行时 ────────────────────────────────────────────────────
     private final JComboBox<DshRuntimeMode> runtimeModeCombo = new JComboBox<>(DshRuntimeMode.values());
@@ -90,6 +105,15 @@ public final class DshSettingsConfigurable implements Configurable {
     private final JButton checkUpdateButton = new JButton("检查更新");
 
     private JPanel root;
+
+    /**
+     * 平台按项目实例化（{@code projectConfigurable} 要求存在接收 {@link Project} 的构造函数）。
+     *
+     * @param project 当前项目，用于读写项目级设置
+     */
+    public DshSettingsConfigurable(@NotNull Project project) {
+        this.project = project;
+    }
 
     @Override
     public @Nls(capitalization = Nls.Capitalization.Title) String getDisplayName() {
@@ -123,7 +147,7 @@ public final class DshSettingsConfigurable implements Configurable {
 
         // ── 服务器 ────────────────────────────────────────────────────
         {
-            JPanel server = sectionPanel("服务器");
+            JPanel server = sectionPanel("服务器（仅本项目）");
             GridBagConstraints c = gridBag();
             int r = 0;
 
@@ -138,15 +162,22 @@ public final class DshSettingsConfigurable implements Configurable {
             c.gridy = r++;
             c.gridx = 0;
             c.weightx = 0;
-            server.add(new JBLabel("自动启动端口:"), c);
+            server.add(new JBLabel("期望端口:"), c);
             c.gridx = 1;
             c.weightx = 1;
             server.add(startPortSpinner, c);
 
             c.gridy = r++;
             c.gridx = 0;
+            c.gridwidth = 2;
+            c.weightx = 1;
+            server.add(effectiveAddressLabel, c);
+            c.gridwidth = 1;
+
+            c.gridy = r++;
+            c.gridx = 0;
             c.weightx = 0;
-            server.add(new JBLabel("启动命令模板:"), c);
+            server.add(new JBLabel("启动命令模板（全局）:"), c);
             c.gridx = 1;
             c.weightx = 1;
             server.add(serverCommandField, c);
@@ -289,6 +320,13 @@ public final class DshSettingsConfigurable implements Configurable {
             startup.add(embeddedCheckBox, c);
             c.gridwidth = 1;
 
+            c.gridy = r++;
+            c.gridx = 0;
+            c.gridwidth = 2;
+            c.weightx = 1;
+            startup.add(keepProcessCheckBox, c);
+            c.gridwidth = 1;
+
             addSection(box, startup);
         }
 
@@ -353,6 +391,26 @@ public final class DshSettingsConfigurable implements Configurable {
         }
 
         root.add(new JScrollPane(box), BorderLayout.CENTER);
+
+        // 「当前地址」这一行随地址框 / 端口框实时变化，让用户立刻看到实际会用哪个地址
+        serverUrlField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                refreshEffectiveAddress();
+            }
+
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                refreshEffectiveAddress();
+            }
+
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                refreshEffectiveAddress();
+            }
+        });
+        startPortSpinner.addChangeListener(e -> refreshEffectiveAddress());
+
         reset();
         return root;
     }
@@ -380,15 +438,56 @@ public final class DshSettingsConfigurable implements Configurable {
     private static JBLabel buildHints() {
         return new JBLabel(
                 "<html><div style='width:520px'>" +
+                        "<b>哪些是项目级</b>：服务器地址 / 期望端口 / 工作目录 / Token <b>只对本项目生效</b>，" +
+                        "存在项目自己的 workspace 里；运行时、主题、背景图、启动选项是所有项目共享的全局设置。<br>" +
+                        "<b>服务器地址</b>：<b>留空＝自动管理</b> —— 本插件为本项目拉起一个 dsh 进程，" +
+                        "端口优先用上次分配到的、其次用「期望端口」，被占用时自动改用空闲端口；" +
+                        "它<b>不会</b>去复用别的项目已经在跑的那个实例（复用会让两个项目串会话）。" +
+                        "填了地址＝手动模式，直接连它（例如终端里已经起好的实例），插件不再自己拉进程。<br>" +
                         "<b>启动命令</b>：留空使用默认 <code>{dsh} web --host {host} --port {port} --no-open</code>；" +
                         "支持占位符 <code>{dsh} {host} {port} {workdir} {dshHome}</code>。" +
                         "<code>{dsh}</code> 按上面的「运行时来源」展开为已下载运行时或系统 <code>npx</code>；" +
-                        "模板里不含它时命令原样执行。<br>" +
-                        "<b>工作目录</b>：留空则使用当前项目目录（作为 Harness 的 workspace 根目录）。<br>" +
+                        "模板里不含它时命令原样执行。其中 <code>{host} {port} {workdir}</code> 取自本项目。<br>" +
+                        "<b>工作目录</b>：留空则使用本项目根目录，作为 Harness 的 workspace 根。" +
+                        "dsh 的会话按 workspace 隔离，所以同时打开的两个项目会话互不可见。<br>" +
                         "<b>DSH_HOME</b>：留空则使用运行时目录下的 <code>.dsh</code>（可通过环境变量覆盖）。<br>" +
                         "<b>服务器 Token</b>：连接非本插件启动的服务器时，从其启动输出里的 <code>?token=…</code> " +
                         "复制 token 到此处，即可使用「发送代码」「会话列表」等 IDE 内操作；本插件自己启动的服务器无需填写。" +
                         "</div></html>");
+    }
+
+    /**
+     * 刷新「当前地址」那一行。
+     * <p>
+     * 按输入框里的<b>当前值</b>推算（而不是已保存的值），这样用户一边改一边就能看到结果；
+     * 端口被占用时插件会自动换端口，这一行会如实说明换了哪个。
+     */
+    private void refreshEffectiveAddress() {
+        if (effectiveAddressLabel == null) {
+            return;
+        }
+        String typed = serverUrlField.getText() == null ? "" : serverUrlField.getText().trim();
+        int typedPort = (Integer) startPortSpinner.getValue();
+        DshProjectSettings ps = DshProjectSettings.getInstance(project);
+        String url;
+        String mode;
+        if (!typed.isEmpty()) {
+            url = typed;
+            mode = "手动模式：直接连这个地址，插件不自己拉进程";
+        } else {
+            int actual = ps.allocatedPort > 0 ? ps.allocatedPort : typedPort;
+            url = "http://127.0.0.1:" + actual;
+            if (ps.allocatedPort > 0 && ps.allocatedPort != typedPort) {
+                mode = "自动模式：期望端口 " + typedPort + " 已被占用，本项目实际用 " + ps.allocatedPort;
+            } else {
+                mode = "自动模式：本插件为本项目拉起 dsh";
+            }
+        }
+        effectiveAddressLabel.setText("<html>本项目当前地址：<b>" + url + "</b>　·　" + mode + "</html>");
+        effectiveAddressLabel.setForeground(JBColor.GRAY);
+        effectiveAddressLabel.setToolTipText(
+                "工作目录：" + ps.resolvedWorkingDirectory()
+                        + "　（Harness 的 workspace 根，会话按它隔离）");
     }
 
     /** 运行时区块的说明文字。 */
@@ -617,10 +716,12 @@ public final class DshSettingsConfigurable implements Configurable {
         testResultLabel.setText("检测中…");
         testResultLabel.setForeground(JBColor.GRAY);
         String url = serverUrlField.getText().trim();
+        // 地址留空 = 自动模式：测的就是本项目实际会连的那个地址（含自动分配到的端口）
+        String target = url.isEmpty()
+                ? DshProjectSettings.getInstance(project).effectiveServerUrl()
+                : url;
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
-            boolean up = DshUtil.isReachable(
-                    url.isEmpty() ? DshStudioConstants.DEFAULT_SERVER_URL : url,
-                    DshStudioConstants.HEALTH_TIMEOUT_MS);
+            boolean up = DshUtil.isReachable(target, DshStudioConstants.HEALTH_TIMEOUT_MS);
             ApplicationManager.getApplication().invokeLater(() -> {
                 if (up) {
                     testResultLabel.setForeground(new JBColor(0x1E8E3E, 0x81C995));
@@ -710,33 +811,53 @@ public final class DshSettingsConfigurable implements Configurable {
     @Override
     public boolean isModified() {
         DshSettingsState state = DshSettingsState.getInstance();
-        return !serverUrlField.getText().trim().equals(state.serverUrl)
-                || (Integer) startPortSpinner.getValue() != state.startPort
+        DshProjectSettings ps = DshProjectSettings.getInstance(project);
+        return !serverUrlField.getText().trim().equals(ps.serverUrl == null ? "" : ps.serverUrl)
+                || (Integer) startPortSpinner.getValue() != ps.startPort
                 || !serverCommandField.getText().equals(state.serverCommand)
                 || !((DshRuntimeMode) runtimeModeCombo.getSelectedItem()).id.equals(state.runtimeMode)
                 || !((DshRuntimeLocation) runtimeLocationCombo.getSelectedItem()).id.equals(state.runtimeLocation)
-                || !workingDirectoryField.getText().equals(state.workingDirectory)
+                || !workingDirectoryField.getText().equals(ps.workingDirectory == null ? "" : ps.workingDirectory)
                 || !dshHomeField.getText().equals(state.dshHome)
-                || !serverTokenField.getText().trim().equals(state.serverAuthToken)
+                || !serverTokenField.getText().trim().equals(ps.normalizedServerAuthToken())
                 || autoStartCheckBox.isSelected() != state.autoStartServer
                 || embeddedCheckBox.isSelected() != state.useEmbeddedBrowser
+                || keepProcessCheckBox.isSelected() != state.keepDshRunningAfterProjectClose
                 || !((DshUiTheme) themeCombo.getSelectedItem()).id.equals(state.uiTheme);
     }
 
     @Override
     public void apply() {
         DshSettingsState state = DshSettingsState.getInstance();
-        state.serverUrl = serverUrlField.getText().trim();
-        state.startPort = (Integer) startPortSpinner.getValue();
+        DshProjectSettings ps = DshProjectSettings.getInstance(project);
+
+        // ── 项目级：只影响当前项目 ──
+        String typedUrl = serverUrlField.getText().trim();
+        if (!typedUrl.equals(ps.serverUrl == null ? "" : ps.serverUrl)) {
+            // 地址变了（自动↔手动切换）：旧的「已分配端口」不再适用，清掉让它重新挑
+            ps.allocatedPort = 0;
+        }
+        ps.serverUrl = typedUrl;
+        int typedPort = (Integer) startPortSpinner.getValue();
+        if (typedPort != ps.startPort) {
+            // 期望端口改了：下次启动重新挑（否则会一直粘着上次分配到的端口，改了也不生效）
+            ps.allocatedPort = 0;
+        }
+        ps.startPort = typedPort;
+        ps.workingDirectory = workingDirectoryField.getText().trim();
+        ps.serverAuthToken = serverTokenField.getText().trim();
+
+        // ── 应用级：所有项目共享 ──
         state.serverCommand = serverCommandField.getText().trim();
         state.runtimeMode = ((DshRuntimeMode) runtimeModeCombo.getSelectedItem()).id;
         state.runtimeLocation = ((DshRuntimeLocation) runtimeLocationCombo.getSelectedItem()).id;
-        state.workingDirectory = workingDirectoryField.getText().trim();
         state.dshHome = dshHomeField.getText().trim();
-        state.serverAuthToken = serverTokenField.getText().trim();
         state.autoStartServer = autoStartCheckBox.isSelected();
         state.useEmbeddedBrowser = embeddedCheckBox.isSelected();
+        state.keepDshRunningAfterProjectClose = keepProcessCheckBox.isSelected();
         state.uiTheme = ((DshUiTheme) themeCombo.getSelectedItem()).id;
+
+        refreshEffectiveAddress();
         // 广播设置变化，让已打开的工具窗口重新应用（主题 / 背景浮层）
         ApplicationManager.getApplication().getMessageBus()
                 .syncPublisher(DshSettingsTopics.SETTINGS_TOPIC).onChanged();
@@ -745,16 +866,18 @@ public final class DshSettingsConfigurable implements Configurable {
     @Override
     public void reset() {
         DshSettingsState state = DshSettingsState.getInstance();
-        serverUrlField.setText(state.serverUrl);
-        startPortSpinner.setValue(state.startPort);
+        DshProjectSettings ps = DshProjectSettings.getInstance(project);
+        serverUrlField.setText(ps.serverUrl == null ? "" : ps.serverUrl);
+        startPortSpinner.setValue(ps.startPort);
         serverCommandField.setText(state.serverCommand);
         runtimeModeCombo.setSelectedItem(DshRuntimeMode.fromId(state.runtimeMode));
         runtimeLocationCombo.setSelectedItem(DshRuntimeLocation.fromId(state.runtimeLocation));
-        workingDirectoryField.setText(state.workingDirectory);
+        workingDirectoryField.setText(ps.workingDirectory == null ? "" : ps.workingDirectory);
         dshHomeField.setText(state.dshHome);
-        serverTokenField.setText(state.serverAuthToken);
+        serverTokenField.setText(ps.normalizedServerAuthToken());
         autoStartCheckBox.setSelected(state.autoStartServer);
         embeddedCheckBox.setSelected(state.useEmbeddedBrowser);
+        keepProcessCheckBox.setSelected(state.keepDshRunningAfterProjectClose);
         themeCombo.setSelectedItem(DshUiTheme.fromId(state.uiTheme));
         testResultLabel.setText("");
         testResultLabel.setHorizontalAlignment(SwingConstants.LEFT);
@@ -764,6 +887,7 @@ public final class DshSettingsConfigurable implements Configurable {
         dshVersionLabel.setForeground(JBColor.GRAY);
         // 设置页每次打开都重新探测 Node：用户可能刚在 IDE 运行期间装好
         nodeReport = null;
+        refreshEffectiveAddress();
         refreshRuntimeInfo();
         refreshDshVersion();
     }

@@ -1,6 +1,7 @@
 package com.deepseek.dshstudio.server;
 
 import com.deepseek.dshstudio.DshStudioConstants;
+import com.deepseek.dshstudio.settings.DshProjectSettings;
 import com.deepseek.dshstudio.settings.DshSettingsState;
 import com.deepseek.dshstudio.util.DshUtil;
 import com.google.gson.Gson;
@@ -140,7 +141,9 @@ public final class DshApiClient {
         if (existing != null && !existing.isEmpty()) {
             return existing;
         }
-        String cwd = DshUtil.resolveWorkingDirectory(DshSettingsState.getInstance(), project);
+        // 工作目录取项目级设置：会话的 workspace 根就是它，dsh 按它隔离会话
+        String cwd = DshUtil.resolveWorkingDirectory(
+                DshSettingsState.getInstance(), DshProjectSettings.getInstance(project));
         String sessionId = createSession(cwd);
         currentSessionId = sessionId;
         // 命名非关键路径，失败不打断

@@ -3,6 +3,7 @@ package com.deepseek.dshstudio.util;
 import com.deepseek.dshstudio.DshStudioConstants;
 import com.deepseek.dshstudio.runtime.DshRuntimeManager;
 import com.deepseek.dshstudio.runtime.DshRuntimeMode;
+import com.deepseek.dshstudio.settings.DshProjectSettings;
 import com.deepseek.dshstudio.settings.DshSettingsState;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
@@ -21,6 +22,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -108,11 +112,59 @@ public final class DshUtil {
         }
     }
 
+    // ── 端口 ──────────────────────────────────────────────────────────────
+
+    /**
+     * 端口是否可绑定（等价于「空闲」）。
+     * <p>
+     * 用「试着绑一次再放开」判断，比解析 netstat 可靠：不受 TIME_WAIT、其它用户进程可见性、
+     * 以及各平台输出格式差异的影响。
+     * <p>
+     * 判定与真正启动之间有一个很短的窗口期，理论上仍可能被别的进程抢走；而 dsh 的
+     * {@code webServer.listen} 一旦失败会直接让初始化失败（不会自动换端口），
+     * 所以多项目并行时必须由插件在启动前挑好端口 —— 本方法就是这个挑选动作的基础。
+     *
+     * @param port 端口号（1–65535）
+     */
+    public static boolean isPortAvailable(int port) {
+        if (port <= 0 || port > 65535) {
+            return false;
+        }
+        try (ServerSocket socket = new ServerSocket()) {
+            // 显式关掉 SO_REUSEADDR：开着的话在部分平台上能「绑上」别人正在监听的端口，判定就失效了
+            socket.setReuseAddress(false);
+            socket.bind(new InetSocketAddress("127.0.0.1", port));
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 让操作系统分配一个空闲端口（绑定 0 号端口再取实际端口）。
+     * <p>
+     * 用于「期望端口被别的项目占用」时自动让路，避免第二个项目启动直接失败。
+     *
+     * @return 可用端口；失败返回 -1
+     */
+    public static int findFreePort() {
+        try (ServerSocket socket = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            return socket.getLocalPort();
+        } catch (IOException e) {
+            return -1;
+        }
+    }
+
     // ── 命令构建 ──────────────────────────────────────────────────────────
 
     /**
      * 解析工作目录：优先用户配置，其次当前项目目录，最后用户主目录。
+     *
+     * @deprecated 工作目录已下沉到项目级设置，请优先用
+     *             {@link #resolveWorkingDirectory(DshSettingsState, DshProjectSettings)}。
+     *             本重载保留给没有项目级上下文的调用方与单元测试。
      */
+    @Deprecated
     public static String resolveWorkingDirectory(@NotNull DshSettingsState settings,
                                                  @Nullable Project project) {
         String configured = settings.workingDirectory == null ? "" : settings.workingDirectory.trim();
@@ -126,45 +178,115 @@ public final class DshUtil {
     }
 
     /**
-     * 构建服务器启动命令。
+     * 解析工作目录（项目级优先）：项目设置里配了就用它，否则用该项目的 {@code basePath}。
+     * <p>
+     * 这是「手动改工作目录只影响当前项目」的实现基础；项目 B 是项目 A 的子目录时，
+     * 各自解析到各自的 {@code basePath}，不会互相污染。
+     *
+     * @param projectSettings 项目级设置；为 {@code null} 时退回应用级旧字段
+     */
+    public static String resolveWorkingDirectory(@NotNull DshSettingsState settings,
+                                                 @Nullable DshProjectSettings projectSettings) {
+        if (projectSettings != null) {
+            return projectSettings.resolvedWorkingDirectory();
+        }
+        String configured = settings.workingDirectory == null ? "" : settings.workingDirectory.trim();
+        return configured.isEmpty() ? System.getProperty("user.home", ".") : configured;
+    }
+
+    /**
+     * 构建服务器启动命令（项目级）：{host} / {port} / {workdir} 都取当前项目的值。
      * <p>
      * 模板占位符：{host} {port} {workdir} {dshHome} 为纯文本替换；
      * {dsh} 展开为「用哪一份 dsh 启动」的完整前缀（已下载运行时 / 系统 npx），
      * 由 {@link DshRuntimeManager} 按设置里的运行时来源决定。
      */
     public static List<String> resolveCommandLine(@NotNull DshSettingsState settings,
+                                                  @Nullable DshProjectSettings projectSettings,
+                                                  @Nullable Project project) {
+        return resolveTemplate(settings.normalizedServerCommand(), settings, projectSettings, project);
+    }
+
+    /**
+     * 构建服务器启动命令（应用级旧签名）。
+     *
+     * @deprecated 保留给单元测试；生产代码请用带项目级设置的重载。
+     */
+    @Deprecated
+    public static List<String> resolveCommandLine(@NotNull DshSettingsState settings,
                                                   @Nullable Project project) {
         return resolveTemplate(settings.normalizedServerCommand(), settings, project);
     }
 
     /**
-     * 展开一个命令模板为参数列表。
-     * <p>
-     * {@code {dsh}} 展开后可能包含带空格的路径（{@code C:\Program Files\nodejs\node.exe}），
-     * 所以是按 token 拼接而不是字符串替换 —— 字符串替换后再分词会把路径拆断。
+     * 展开一个命令模板为参数列表（项目级）。
+     *
+     * @param projectSettings 项目级设置；为 {@code null} 时退回应用级旧字段
      */
     public static List<String> resolveTemplate(@NotNull String template,
                                                @NotNull DshSettingsState settings,
+                                               @Nullable DshProjectSettings projectSettings,
                                                @Nullable Project project) {
         // 模板里没有 {dsh} 时完全不碰运行时解析：自定义命令不应被已下载运行时的可用性牵连
         if (!template.contains(DshStudioConstants.DSH_PLACEHOLDER)) {
-            return resolveTemplate(template, settings, project, List.of());
+            return resolveTemplate(template, settings, projectSettings, project, List.of());
         }
-        return resolveTemplate(template, settings, project, resolveDshPrefix(settings));
+        return resolveTemplate(template, settings, projectSettings, project, resolveDshPrefix(settings));
+    }
+
+    /**
+     * 展开一个命令模板为参数列表（应用级旧签名）。
+     *
+     * @deprecated 保留给单元测试；生产代码请用带项目级设置的重载。
+     */
+    @Deprecated
+    public static List<String> resolveTemplate(@NotNull String template,
+                                               @NotNull DshSettingsState settings,
+                                               @Nullable Project project) {
+        return resolveTemplate(template, settings, null, project);
     }
 
     /**
      * 展开模板，{@code {dsh}} 用调用方给定的前缀。
      * <p>
      * 单独把前缀抽出来是为了可测：单元测试里没有 IDE 应用环境，拿不到运行时服务。
+     *
+     * @deprecated 保留给单元测试；生产代码请用带项目级设置的重载。
      */
+    @Deprecated
     public static List<String> resolveTemplate(@NotNull String template,
                                                @NotNull DshSettingsState settings,
                                                @Nullable Project project,
                                                @NotNull List<String> dshPrefix) {
-        String host = hostOf(settings.normalizedServerUrl());
-        String port = String.valueOf(settings.startPort);
-        String workdir = resolveWorkingDirectory(settings, project);
+        return resolveTemplate(template, settings, null, project, dshPrefix);
+    }
+
+    /**
+     * 展开模板（完整实现）。
+     * <p>
+     * {@code {host}} / {@code {port}} / {@code {workdir}} 取自<b>项目级</b>设置：这样 A、B 两个项目
+     * 各自的启动命令会带上各自的端口与工作目录，B 不会因为端口撞上 A 而启动失败
+     * （端口由 {@code DshServerManager} 在启动前挑好并写回项目设置）。
+     * <p>
+     * {@code {dsh}} 展开后可能包含带空格的路径（{@code C:\Program Files\nodejs\node.exe}），
+     * 所以是按 token 拼接而不是字符串替换 —— 字符串替换后再分词会把路径拆断。
+     *
+     * @param projectSettings 项目级设置；为 {@code null} 时退回应用级旧字段
+     */
+    public static List<String> resolveTemplate(@NotNull String template,
+                                               @NotNull DshSettingsState settings,
+                                               @Nullable DshProjectSettings projectSettings,
+                                               @Nullable Project project,
+                                               @NotNull List<String> dshPrefix) {
+        String host = projectSettings != null
+                ? projectSettings.effectiveHost()
+                : hostOf(settings.normalizedServerUrl());
+        String port = projectSettings != null
+                ? String.valueOf(projectSettings.effectivePort())
+                : String.valueOf(settings.startPort);
+        String workdir = projectSettings != null
+                ? projectSettings.resolvedWorkingDirectory()
+                : resolveWorkingDirectory(settings, project);
         String dshHome = settings.dshHome == null ? "" : settings.dshHome.trim();
 
         String expanded = template

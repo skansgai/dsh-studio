@@ -4,12 +4,15 @@ import com.deepseek.dshstudio.DshStudioConstants;
 import com.deepseek.dshstudio.runtime.DshNodeChecker;
 import com.deepseek.dshstudio.runtime.DshRuntimeManager;
 import com.deepseek.dshstudio.runtime.DshRuntimeMode;
+import com.deepseek.dshstudio.settings.DshProjectSettings;
 import com.deepseek.dshstudio.settings.DshSettingsState;
+import com.deepseek.dshstudio.settings.DshSettingsTopics;
 import com.deepseek.dshstudio.util.DshUtil;
 import com.intellij.notification.Notification;
 import com.intellij.notification.NotificationAction;
 import com.intellij.notification.NotificationGroupManager;
 import com.intellij.notification.NotificationType;
+import com.intellij.openapi.Disposable;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
@@ -35,8 +38,20 @@ import java.util.List;
  *   <li>{@link ServerState#RUNNING} — 服务器可达（本插件启动的，或外部已运行的实例）</li>
  *   <li>{@link ServerState#FAILED} — 启动失败 / 启动超时 / 进程异常退出</li>
  * </ul>
+ * <p>
+ * <b>每个项目一个实例</b>：进程句柄、日志、状态、连接地址全部挂在项目上（地址与端口取自
+ * {@link DshProjectSettings}）。所以同时打开 A、B 两个项目会跑两个独立的 dsh 进程、
+ * 监听两个不同端口、各自以自己的 {@code basePath} 作为 workspace，会话互不可见。
+ * <p>
+ * <b>端口</b>：自动模式下 {@link #allocatePort} 会在启动前挑一个空闲端口
+ * （复用上次分配到的 → 期望端口 → 系统分配），<b>绝不复用</b>已被别人监听的那个端口 ——
+ * 多项目并行时那多半是另一个项目的 dsh，复用就会串会话。
+ * <p>
+ * <b>生命周期</b>：本服务实现了 {@link Disposable}，项目关闭 / IDE 退出时由平台调用
+ * {@link #dispose()} 结束本插件为该项目拉起的进程（可用设置里的
+ * {@code keepDshRunningAfterProjectClose} 关掉这个行为）。
  */
-public final class DshServerManager {
+public final class DshServerManager implements Disposable {
 
     public enum ServerState {
         STOPPED,
@@ -61,8 +76,33 @@ public final class DshServerManager {
     /** 本次"复用外部实例"是否已经提示过（避免每次探测都弹一次）。 */
     private volatile boolean staleWarned;
 
+    /**
+     * 项目关闭时是否保留本插件拉起的进程。
+     * <p>
+     * 由 {@link DshSettingsState#keepDshRunningAfterProjectClose} 决定，默认 false（随项目一起结束）。
+     * 构造时先读一次，之后订阅应用级设置变化保持同步 —— {@link #dispose()} 发生在项目关闭 /
+     * IDE 退出那一刻，此时应用级服务可能已经不可用，所以必须留一份不依赖服务查找的本地快照。
+     */
+    private volatile boolean keepProcessOnDispose;
+
     private DshServerManager(@NotNull Project project) {
         this.project = project;
+        this.keepProcessOnDispose = readKeepProcessSetting();
+        // 设置页在应用总线上广播变更；用户中途改了开关也能立刻生效
+        ApplicationManager.getApplication().getMessageBus()
+                .connect(this)
+                .subscribe(DshSettingsTopics.SETTINGS_TOPIC,
+                        () -> keepProcessOnDispose = readKeepProcessSetting());
+    }
+
+    /** 读取「项目关闭后保留 dsh 进程」开关；取不到（无应用环境 / 服务已销毁）时按 false 处理。 */
+    private static boolean readKeepProcessSetting() {
+        try {
+            DshSettingsState settings = DshSettingsState.getInstance();
+            return settings != null && settings.keepDshRunningAfterProjectClose;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public static DshServerManager getInstance(@NotNull Project project) {
@@ -86,9 +126,15 @@ public final class DshServerManager {
         return p != null && p.isAlive();
     }
 
-    /** 当前连接地址。 */
+    /**
+     * 当前连接地址（<b>项目级</b>）。
+     * <p>
+     * 自动模式下由本项目已分配 / 期望的端口推导（{@code http://127.0.0.1:<port>}）；
+     * 手动模式下就是用户为该项目的填的地址。所以 A、B 两个项目各自拿到自己的地址，
+     * 不会因为共享一份全局配置而互相覆盖。
+     */
     public String getUrl() {
-        return DshSettingsState.getInstance().normalizedServerUrl();
+        return DshProjectSettings.getInstance(project).effectiveServerUrl();
     }
 
     /** 本插件启动的进程打印的 launch token（未捕获到时为 null）。 */
@@ -126,6 +172,14 @@ public final class DshServerManager {
      */
     public void startServer() {
         DshSettingsState settings = DshSettingsState.getInstance();
+        DshProjectSettings projectSettings = DshProjectSettings.getInstance(project);
+
+        // 已经由本插件拉起的进程还在：只刷新状态，别重复启动（再拉一次会白占一个端口）
+        if (isManagedProcessAlive()) {
+            probe();
+            setState(reachable ? ServerState.RUNNING : ServerState.STARTING);
+            return;
+        }
 
         // 运行时准备刻意放在锁外：首次使用需要下载并解包运行时（约 41 MB / 1.8 万文件，
         // 可能几十秒并弹出进度框），期间不该占着 lock 让其它线程干等。
@@ -141,11 +195,25 @@ public final class DshServerManager {
             return;
         }
 
+        // 自动模式：先为本项目锁定一个空闲端口。
+        // 端口被别的进程占了（多项目并行时多半是另一个项目的 dsh）就自动换一个，
+        // 而不是复用那个实例 —— 复用会让本项目连到别的项目上去，两边会话就串了。
+        // dsh 的 webServer.listen 失败会直接让初始化失败（不会自己换端口），所以必须由这里挑好。
+        if (projectSettings.isAutoManaged() && allocatePort(projectSettings) <= 0) {
+            appendLog("[dsh] 找不到可用端口，启动中止。\n");
+            notifyBalloon("无法启动 DeepSeek Harness 服务器",
+                    "本机没有可用的回环端口（期望端口与系统分配都失败了）。",
+                    NotificationType.ERROR);
+            startAttempted = true;
+            setState(ServerState.FAILED);
+            return;
+        }
+
         // 启动命令解析与 Node 前置检查也放在锁外：引导对话框是模态的，
         // 占着 lock 会让状态栏、动作等其它线程干等。命令解析是纯函数，没有副作用。
         List<String> command;
         try {
-            command = DshUtil.resolveCommandLine(settings, project);
+            command = DshUtil.resolveCommandLine(settings, projectSettings, project);
         } catch (Exception e) {
             appendLog("[dsh] 无法解析启动命令: " + e.getMessage() + "\n");
             startAttempted = true;
@@ -169,6 +237,8 @@ public final class DshServerManager {
         }
 
         synchronized (lock) {
+            // 端口可能刚被换过，用最终地址重新探测一次再决定「复用」还是「拉起」
+            probe();
             if (reachable) {
                 startAttempted = false;
                 setState(ServerState.RUNNING);
@@ -183,7 +253,7 @@ public final class DshServerManager {
                 setState(ServerState.STARTING);
                 return;
             }
-            String workdir = DshUtil.resolveWorkingDirectory(settings, project);
+            String workdir = DshUtil.resolveWorkingDirectory(settings, projectSettings);
             try {
                 ProcessBuilder pb = new ProcessBuilder(command);
                 pb.directory(new File(workdir));
@@ -260,6 +330,45 @@ public final class DshServerManager {
                 setState(ServerState.FAILED);
             }
         }
+    }
+
+    /**
+     * 为自动模式挑一个可用端口。
+     * <p>
+     * 顺序：
+     * <ol>
+     *   <li>本项目上次实际分配到的端口 —— 让地址在 IDE 重启后保持稳定（书签、外部工具里的地址不至于失效）；</li>
+     *   <li>设置里的期望端口（默认 3080）；</li>
+     *   <li>让操作系统分配一个空闲端口。</li>
+     * </ol>
+     * 选好后写回项目设置。
+     * <p>
+     * <b>刻意不复用</b>「端口上已有的服务」：多项目并行时那多半是另一个项目的 dsh 实例，
+     * 复用会让两个项目的会话串在一起。想连已有实例请改用手动模式（在设置里填服务器地址）。
+     *
+     * @return 可用端口；都不可用时返回 -1
+     */
+    private int allocatePort(@NotNull DshProjectSettings projectSettings) {
+        int sticky = projectSettings.allocatedPort;
+        if (sticky > 0 && DshUtil.isPortAvailable(sticky)) {
+            return sticky;
+        }
+        int preferred = projectSettings.startPort > 0
+                ? projectSettings.startPort
+                : DshStudioConstants.DEFAULT_PORT;
+        if (DshUtil.isPortAvailable(preferred)) {
+            projectSettings.allocatedPort = preferred;
+            return preferred;
+        }
+        int free = DshUtil.findFreePort();
+        if (free <= 0) {
+            return -1;
+        }
+        appendLog("[dsh] 期望端口 " + preferred + " 已被占用（很可能是另一个项目正在跑的 dsh 实例），"
+                + "本项目改用空闲端口 " + free + "。\n"
+                + "[dsh] 想连那个已有实例，请到 设置 → DeepSeek Harness 把「服务器地址」填成它的地址（手动模式）。\n");
+        projectSettings.allocatedPort = free;
+        return free;
     }
 
     /**
@@ -527,5 +636,35 @@ public final class DshServerManager {
                         .notify(project);
             }
         });
+    }
+
+    // ── 生命周期 ──────────────────────────────────────────────────────────
+
+    /**
+     * 项目关闭（或 IDE 退出）时由平台调用：结束<b>本项目</b>拉起的 dsh 进程。
+     * <p>
+     * 不这么做的话关掉项目后进程会变成孤儿：继续占着端口、继续写共享的 DSH_HOME，
+     * 下次开项目又拉起一个新实例，越积越多，而且旧实例还拿着过期的代码/配置。
+     * <p>
+     * 只结束本插件自己拉起的进程 —— 手动模式连的外部实例不归插件管，不会被误杀。
+     * 用户在设置里勾了「项目关闭后保留 dsh 服务器进程」时跳过（默认不勾）。
+     */
+    @Override
+    public void dispose() {
+        Process p = process;
+        process = null;
+        if (p == null || !p.isAlive()) {
+            return;
+        }
+        if (keepProcessOnDispose) {
+            appendLog("[dsh] 项目已关闭；按设置保留服务器进程（PID " + p.pid() + "）。\n");
+            return;
+        }
+        try {
+            // 同步执行：IDE 退出路径上 pooled thread 未必还跑得到，而 taskkill 通常几百毫秒返回
+            DshUtil.destroyProcessTree(p);
+        } catch (Exception ignored) {
+            // 退出路径上尽力而为：杀不掉也不该让关闭流程抛异常
+        }
     }
 }

@@ -5,6 +5,7 @@ import com.deepseek.dshstudio.runtime.DshNodeChecker;
 import com.deepseek.dshstudio.runtime.DshRuntimeManager;
 import com.deepseek.dshstudio.runtime.DshRuntimeMode;
 import com.deepseek.dshstudio.server.DshServerManager;
+import com.deepseek.dshstudio.settings.DshProjectSettings;
 import com.deepseek.dshstudio.settings.DshSettingsState;
 import com.deepseek.dshstudio.util.DshUtil;
 import com.intellij.notification.NotificationGroupManager;
@@ -69,7 +70,8 @@ public final class DshHeadlessTaskAction extends AnAction {
     private static void runHeadless(Project project, String task) {
         DshServerManager manager = DshServerManager.getInstance(project);
         DshSettingsState settings = DshSettingsState.getInstance();
-        String workdir = DshUtil.resolveWorkingDirectory(settings, project);
+        String workdir = DshUtil.resolveWorkingDirectory(
+                settings, DshProjectSettings.getInstance(project));
 
         // 与启动服务器走同一条运行时准备路径（首次可能需要下载 dsh 运行时）
         try {
@@ -150,7 +152,8 @@ public final class DshHeadlessTaskAction extends AnAction {
         DshSettingsState settings = DshSettingsState.getInstance();
         String template = DshStudioConstants.DEFAULT_HEADLESS_COMMAND
                 .replace("{task}", quoteForTemplate(task));
-        return DshUtil.resolveTemplate(template, settings, project);
+        return DshUtil.resolveTemplate(
+                template, settings, DshProjectSettings.getInstance(project), project);
     }
 
     /** 任务文本作为单个参数传递：用双引号包裹（tokenize 支持引号）。 */
