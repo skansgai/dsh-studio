@@ -77,6 +77,19 @@ public final class DshProjectSettings implements PersistentStateComponent<DshPro
         this.project = project;
     }
 
+    /**
+     * 平台反序列化 state 用的无参构造。
+     * <p>
+     * 本类把自己当作 {@link PersistentStateComponent} 的 state 类型，而平台的
+     * {@code DefaultStateSerializer.deserializeState} 会 {@code newInstance()} 一个 state 对象，
+     * <b>没有无参构造会直接抛 {@code XmlSerializationException: Cannot deserialize class ...}</b>，
+     * 组件初始化失败 → 项目级设置永远读不回来（0.3.3 就是这样：点 ▶ 毫无反应）。
+     * 这里传 {@code null} 即可：这个实例只用于承载反序列化出来的字段值，不会被当成服务用。
+     */
+    public DshProjectSettings() {
+        this(null);
+    }
+
     public static DshProjectSettings getInstance(@NotNull Project project) {
         return project.getService(DshProjectSettings.class);
     }

@@ -24,7 +24,7 @@ plugins {
 }
 
 group = "com.deepseek"
-version = "0.3.3"
+version = "0.3.4"
 
 repositories {
     mavenCentral()
@@ -117,6 +117,11 @@ intellijPlatform {
         version = project.version.toString()
         // description / changeNotes 的其余部分沿用 plugin.xml 中的内容
         changeNotes = """
+            <h3>0.3.4</h3>
+            <ul>
+              <li><b>修复 0.3.3 装上后「点 ▶ 毫无反应」</b>：项目级设置类把自己当作持久化 state 类型，却没有无参构造，平台的 state 反序列化会直接抛 <code>XmlSerializationException: Cannot deserialize class DshProjectSettings</code>，组件初始化失败，点启动时连第一步取设置就中断了。现已补上无参构造，项目级设置可以正常读写。</li>
+              <li><b>启动失败不再静默</b>：启动过程中的任何未预期异常都会写进 Server Log 并弹一次通知，不再是「点了没反应」。</li>
+            </ul>
             <h3>0.3.3</h3>
             <ul>
               <li><b>每个项目一个 dsh 实例</b>：把「服务器地址 / 端口 / 工作目录 / 鉴权 token」从全局设置下沉到<b>项目级</b>。同一个 IDE 里同时打开 A、B 两个项目时，各自跑各自的 dsh 进程、各自监听各自的端口、各自以自己的项目根目录作为 workspace，配置互不覆盖、会话互不可见。</li>

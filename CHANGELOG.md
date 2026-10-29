@@ -2,6 +2,14 @@
 
 本文件记录 DeepSeek Harness Studio 的版本变更。英文条目对应中文说明，保持双语一致。
 
+## 0.3.4（2026-10-29）
+
+### 修复 / Fixes
+- **0.3.3 装上后「点 ▶ 毫无反应」/ "Clicking start does nothing" after installing 0.3.3**：项目级设置类 `DshProjectSettings` 把自己当作持久化 state 类型，却只有 `(Project)` 一个构造函数，没有无参构造。平台的 state 反序列化（`DefaultStateSerializer.deserializeState`，即 `ComponentStoreImpl` 加载 `workspace.xml` 时走的入口）会直接抛 `XmlSerializationException: Cannot deserialize class DshProjectSettings`，组件初始化失败 —— 点启动时第一步取项目设置就中断了，界面上表现为完全没反应。现已补上无参构造。
+  / `DshProjectSettings` used itself as the persistent state type but only had a `(Project)` constructor. The platform's state deserializer (the exact entry point `ComponentStoreImpl` uses when loading `workspace.xml`) threw `XmlSerializationException: Cannot deserialize class DshProjectSettings`, so the component never initialized and the very first step of "start server" died silently. A no-arg constructor is now provided.
+- **启动失败不再静默 / Startup failures are no longer silent**：`startServer()` 兜住所有未预期异常，写进 Server Log 并弹一次通知，不再是「点了没反应」。
+  / `startServer()` now catches every unexpected throwable, writes it to the Server Log and shows one notification instead of failing silently.
+
 ## 0.3.3（2026-09-15）
 
 ### 新增功能 / New features

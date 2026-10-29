@@ -171,6 +171,24 @@ public final class DshServerManager implements Disposable {
      * 启动服务器（异步）。若地址已可达则直接进入 RUNNING（视为外部实例，不再重复启动）。
      */
     public void startServer() {
+        try {
+            doStartServer();
+        } catch (Throwable t) {
+            // 兜住一切未预期异常：以前这里抛出去就只剩 EDT 上的一条堆栈，
+            // 用户看到的是「点了 ▶ 什么也没发生」。现在至少写进 Server Log 并弹一次通知。
+            String message = t.getClass().getSimpleName()
+                    + (t.getMessage() == null ? "" : ": " + t.getMessage());
+            appendLog("[dsh] 启动过程中出现未预期错误：" + message + "\n");
+            notifyBalloon("无法启动 DeepSeek Harness 服务器",
+                    StringUtil.escapeXmlEntities(message)
+                            + "<br>详见工具窗口的 Server Log 面板。",
+                    NotificationType.ERROR);
+            setState(ServerState.FAILED);
+        }
+    }
+
+    /** 启动流程本体；未预期异常统一由 {@link #startServer()} 兜住。 */
+    private void doStartServer() {
         DshSettingsState settings = DshSettingsState.getInstance();
         DshProjectSettings projectSettings = DshProjectSettings.getInstance(project);
 
